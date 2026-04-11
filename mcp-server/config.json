@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "paper-search-mcp": {
+      "command": "npx",
+      "args": ["-y", "paper-search-mcp"],
+      "description": "Searches Semantic Scholar, arXiv, and PubMed for academic papers"
+    }
+  }
+}
