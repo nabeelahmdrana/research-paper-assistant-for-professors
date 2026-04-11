@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.tools import vector_store
 
 app = FastAPI(title="Research Paper Assistant API", version="0.1.0")
 
@@ -21,4 +22,11 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "chromadb": False, "paper_count": 0}
+    chroma_ok = False
+    count = 0
+    try:
+        count = await vector_store.paper_count()
+        chroma_ok = True
+    except Exception:
+        pass
+    return {"status": "ok", "chromadb": chroma_ok, "paper_count": count}

@@ -1,7 +1,9 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     anthropic_api_key: str = ""
     chroma_db_path: str = "./chroma_db"
     chroma_collection_name: str = "research_papers"
@@ -13,9 +15,6 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_file_size_mb: int = 50
     frontend_url: str = "http://localhost:3000"
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()
