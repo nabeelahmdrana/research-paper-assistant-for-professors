@@ -148,14 +148,32 @@ async def test_run_research_empty_question(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_research_not_implemented_returns_503(client: AsyncClient) -> None:
-    """Phase 5 pipeline not wired yet — expect 503."""
-    response = await client.post(
-        "/api/research",
-        json={"question": "What is the transformer architecture?"},
-    )
-    # Phase 4: pipeline raises NotImplementedError → 503
-    assert response.status_code == 503
+async def test_run_research_returns_result(client: AsyncClient) -> None:
+    """Phase 5 pipeline is wired — /api/research returns a structured result."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_content = MagicMock()
+    mock_content.text = '{"summary":"Test summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
+    mock_response = MagicMock()
+    mock_response.content = [mock_content]
+
+    with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.external_search_agent.search_semantic_scholar", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.external_search_agent.search_arxiv", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]):
+
+        response = await client.post(
+            "/api/research",
+            json={"question": "What is the transformer architecture?"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["error"] is None
+    result = body["data"]
+    assert "summary" in result
+    assert "citations" in result
+    assert "id" in result
 
 
 @pytest.mark.asyncio

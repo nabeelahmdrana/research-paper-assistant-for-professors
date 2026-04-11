@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     anthropic_api_key: str = ""
+    claude_model: str = "claude-3-haiku-20240307"
     chroma_db_path: str = "./chroma_db"
     chroma_collection_name: str = "research_papers"
     embedding_model: str = "all-MiniLM-L6-v2"
