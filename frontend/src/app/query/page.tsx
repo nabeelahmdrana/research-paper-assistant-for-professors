@@ -12,8 +12,8 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
-import { MOCK_QUERIES, MOCK_DB_STATS } from "@/lib/mockData";
 import type { QueryResult } from "@/lib/types";
+import { runResearchQuery } from "@/lib/api";
 
 type LoadingStep = "idle" | "active" | "done" | "error";
 
@@ -34,9 +34,6 @@ export default function QueryPage() {
     generating: "idle",
   });
 
-  const delay = (ms: number) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
-
   const handleSearch = async () => {
     if (!question.trim()) return;
     setIsLoading(true);
@@ -45,19 +42,14 @@ export default function QueryPage() {
     setSteps({ local: "active", external: "idle", generating: "idle" });
 
     try {
-      await delay(1500);
-      setSteps((s) => ({ ...s, local: "done", external: "active" }));
-      await delay(1000);
-      setSteps((s) => ({ ...s, external: "done", generating: "active" }));
-      await delay(2000);
-      setSteps((s) => ({ ...s, generating: "done" }));
-
-      const mockResult = MOCK_QUERIES[0];
-      if (mockResult) {
-        setResult(mockResult);
-      }
-    } catch {
-      setError("Unable to connect to the research pipeline.");
+      setSteps({ local: "active", external: "idle", generating: "idle" });
+      const res = await runResearchQuery(question);
+      if (res.error) throw new Error(res.error);
+      setSteps({ local: "done", external: "done", generating: "done" });
+      setResult(res.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to connect to the research pipeline.");
+      setSteps({ local: "error", external: "idle", generating: "idle" });
     } finally {
       setIsLoading(false);
     }
@@ -95,7 +87,7 @@ export default function QueryPage() {
           />
           <div className="flex items-center justify-between flex-wrap gap-3">
             <p className="text-xs text-gray-500">
-              Your query will first search {MOCK_DB_STATS.paperCount} local papers.
+              Your query will first search local papers, then fetch externally if needed.
             </p>
             <Button
               onClick={handleSearch}
@@ -127,26 +119,20 @@ export default function QueryPage() {
             <div className="space-y-4">
               <LoadingStepRow
                 label="Searching local database..."
-                subtext={
-                  steps.local === "done" ? "Found 8 relevant papers" : undefined
-                }
                 status={steps.local}
               />
               {steps.external !== "idle" && (
                 <LoadingStepRow
                   label="Fetching additional papers from Semantic Scholar..."
-                  subtext={
-                    steps.external === "done"
-                      ? "Found 4 additional papers"
-                      : undefined
-                  }
                   status={steps.external}
                 />
               )}
-              <LoadingStepRow
-                label="Generating literature review..."
-                status={steps.generating}
-              />
+              {steps.generating !== "idle" && (
+                <LoadingStepRow
+                  label="Generating literature review..."
+                  status={steps.generating}
+                />
+              )}
             </div>
           </CardContent>
         </Card>

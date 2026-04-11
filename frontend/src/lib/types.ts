@@ -3,7 +3,7 @@ export interface Paper {
   title: string;
   authors: string[];
   year: number;
-  source: "pdf" | "doi" | "arxiv";
+  source: "pdf" | "doi" | "arxiv" | "local" | "external";
   abstract: string;
   dateAdded: string;
   doi?: string;

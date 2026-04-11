@@ -1,3 +1,6 @@
+"use client";
+
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Upload, Search, FileText, Clock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -5,11 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import { MOCK_PAPERS, MOCK_QUERIES, MOCK_DB_STATS } from "@/lib/mockData";
+import type { Paper, QueryResult, DbStats } from "@/lib/types";
+import { getDbStats, listQueryResults, listPapers } from "@/lib/api";
 
 function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
-  const now = new Date("2026-04-11T12:00:00Z");
+  const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffHours / 24);
@@ -22,9 +26,23 @@ function formatRelativeTime(isoDate: string): string {
 }
 
 export default function DashboardPage() {
-  const stats = MOCK_DB_STATS;
-  const recentQueries = MOCK_QUERIES.slice(0, 3);
-  const recentPapers = MOCK_PAPERS.slice(0, 3);
+  const [stats, setStats] = useState<DbStats | null>(null);
+  const [recentQueries, setRecentQueries] = useState<QueryResult[]>([]);
+  const [recentPapers, setRecentPapers] = useState<Paper[]>([]);
+
+  useEffect(() => {
+    getDbStats().then((r) => r.data && setStats(r.data));
+    listQueryResults().then((r) => r.data && setRecentQueries(r.data.results.slice(0, 3)));
+    listPapers().then((r) => r.data && setRecentPapers(r.data.papers.slice(0, 3)));
+  }, []);
+
+  const lastActivity: string = (() => {
+    const latest = [
+      ...recentPapers.map((p) => p.dateAdded),
+      ...recentQueries.map((q) => q.createdAt),
+    ].sort().at(-1);
+    return latest ? formatRelativeTime(latest) : "—";
+  })();
 
   return (
     <div>
@@ -37,7 +55,9 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
         <Card>
           <CardContent className="p-6">
-            <p className="text-3xl font-bold text-blue-600">{stats.paperCount}</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {stats?.paperCount ?? 0}
+            </p>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <FileText className="w-3 h-3" /> Total Papers
             </p>
@@ -45,7 +65,9 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardContent className="p-6">
-            <p className="text-3xl font-bold text-blue-600">12</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {recentQueries.length}
+            </p>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Search className="w-3 h-3" /> Queries Run
             </p>
@@ -53,13 +75,15 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardContent className="p-6">
-            <p className="text-3xl font-bold text-blue-600">{stats.dbSizeMB} MB</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {stats?.dbSizeMB ?? 0} MB
+            </p>
             <p className="text-sm text-gray-500 mt-1">DB Size</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-6">
-            <p className="text-3xl font-bold text-blue-600">2 hrs</p>
+            <p className="text-2xl font-bold text-blue-600">{lastActivity}</p>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Clock className="w-3 h-3" /> Last Activity
             </p>

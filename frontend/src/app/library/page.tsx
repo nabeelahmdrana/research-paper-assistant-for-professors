@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { Search, Eye, Trash2, BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -29,16 +29,16 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import { SkeletonRow } from "@/components/SkeletonRow";
 import { toast } from "@/components/ui/use-toast";
-import { MOCK_PAPERS } from "@/lib/mockData";
 import type { Paper } from "@/lib/types";
+import { listPapers, deletePaper } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 const PAGE_SIZE = 20;
 
 export default function LibraryPage() {
   const router = useRouter();
-  const [papers, setPapers] = useState<Paper[]>(MOCK_PAPERS);
-  const [isLoading] = useState(false);
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [yearFrom, setYearFrom] = useState("");
@@ -47,6 +47,13 @@ export default function LibraryPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<Paper | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    listPapers().then((r) => {
+      if (r.data) setPapers(r.data.papers);
+      setIsLoading(false);
+    });
+  }, []);
 
   const filteredPapers = useMemo(() => {
     return papers.filter((p) => {
@@ -90,8 +97,14 @@ export default function LibraryPage() {
     setDeleteTarget(paper);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
+    const res = await deletePaper(deleteTarget.id);
+    if (res.error) {
+      toast({ title: "Delete failed", description: res.error });
+      setDeleteTarget(null);
+      return;
+    }
     setPapers((prev) => prev.filter((p) => p.id !== deleteTarget.id));
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -102,9 +115,11 @@ export default function LibraryPage() {
     toast({ title: "Paper deleted", description: `"${deleteTarget.title}" was removed.` });
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    await Promise.all(ids.map((id) => deletePaper(id)));
     setPapers((prev) => prev.filter((p) => !selectedIds.has(p.id)));
-    const count = selectedIds.size;
+    const count = ids.length;
     setSelectedIds(new Set());
     setBulkDeleteOpen(false);
     toast({ title: `${count} papers deleted` });
@@ -199,7 +214,11 @@ export default function LibraryPage() {
         <EmptyState
           icon={<BookOpen className="w-16 h-16" />}
           title="No papers found"
-          description="Try adjusting your filters, or upload new papers."
+          description={
+            papers.length === 0
+              ? "Upload papers to build your library."
+              : "Try adjusting your filters."
+          }
           actionLabel="Upload Papers"
           onAction={() => router.push("/upload")}
         />
@@ -308,7 +327,7 @@ export default function LibraryPage() {
       )}
 
       {/* Pagination */}
-      {filteredPapers.length > 0 && (
+      {filteredPapers.length > PAGE_SIZE && (
         <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
           <p>
             Showing {(currentPage - 1) * PAGE_SIZE + 1}–

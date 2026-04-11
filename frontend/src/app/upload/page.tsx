@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
-import { UploadCloud, FileText, CheckCircle, XCircle, X } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { UploadCloud, FileText, CheckCircle, XCircle, X, Clock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,13 +9,12 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { PageHeader } from "@/components/PageHeader";
-import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { toast } from "@/components/ui/use-toast";
-import { MOCK_PAPERS, MOCK_DB_STATS } from "@/lib/mockData";
-import type { Paper } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { uploadPapers, fetchPapersByDoi, getDbStats } from "@/lib/api";
+import type { DbStats } from "@/lib/types";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
@@ -33,71 +32,35 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatRelativeTime(isoDate: string): string {
-  const date = new Date(isoDate);
-  const now = new Date("2026-04-11T12:00:00Z");
-  const diffMs = now.getTime() - date.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffHours < 24) return `${diffHours} hrs ago`;
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays} days ago`;
-  return `${Math.floor(diffDays / 7)}w ago`;
-}
-
 export default function UploadPage() {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [doiInput, setDoiInput] = useState("");
   const [isFetchingDoi, setIsFetchingDoi] = useState(false);
   const [doiError, setDoiError] = useState<string | null>(null);
-  const [papers] = useState<Paper[]>(MOCK_PAPERS);
+  const [dbStats, setDbStats] = useState<DbStats | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const simulateUpload = useCallback((uploadId: string) => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.floor(Math.random() * 15) + 5;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-        setUploadFiles((prev) =>
-          prev.map((f) =>
-            f.id === uploadId ? { ...f, progress: 100, status: "success" } : f
-          )
-        );
-        toast({ title: "Upload complete", description: "Paper stored successfully." });
-      } else {
-        setUploadFiles((prev) =>
-          prev.map((f) =>
-            f.id === uploadId ? { ...f, progress, status: "uploading" } : f
-          )
-        );
-      }
-    }, 200);
+  useEffect(() => {
+    getDbStats().then((r) => r.data && setDbStats(r.data));
   }, []);
 
-  const addFiles = useCallback(
-    (files: FileList | File[]) => {
-      const fileArray = Array.from(files);
-      fileArray.forEach((file) => {
-        const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
-        const uploadId = `${Date.now()}-${Math.random()}`;
-        const newFile: UploadFile = {
+  const addFiles = useCallback((files: FileList | File[]) => {
+    Array.from(files).forEach((file) => {
+      const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
+      const uploadId = `${Date.now()}-${Math.random()}`;
+      setUploadFiles((prev) => [
+        ...prev,
+        {
           id: uploadId,
           file,
           progress: 0,
           status: isPdf ? "idle" : "error",
           errorMessage: isPdf ? undefined : "Only PDF files are supported",
-        };
-        setUploadFiles((prev) => [...prev, newFile]);
-        if (isPdf) {
-          setTimeout(() => simulateUpload(uploadId), 300);
-        }
-      });
-    },
-    [simulateUpload]
-  );
+        },
+      ]);
+    });
+  }, []);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -125,19 +88,73 @@ export default function UploadPage() {
     setUploadFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
+  const handleUploadAll = async () => {
+    const pending = uploadFiles.filter((f) => f.status === "idle");
+    if (pending.length === 0) return;
+
+    setUploadFiles((prev) =>
+      prev.map((f) => (f.status === "idle" ? { ...f, status: "uploading" as UploadStatus, progress: 30 } : f))
+    );
+
+    const result = await uploadPapers(pending.map((f) => f.file));
+
+    // Build a map from filename → error message using the per-file errors array
+    // Backend error strings are formatted as "filename.pdf: reason"
+    const fileErrors = new Map<string, string>();
+    for (const errStr of result.data?.errors ?? []) {
+      const colonIdx = errStr.indexOf(":");
+      if (colonIdx !== -1) {
+        const fname = errStr.slice(0, colonIdx).trim();
+        const reason = errStr.slice(colonIdx + 1).trim();
+        fileErrors.set(fname, reason);
+      }
+    }
+
+    setUploadFiles((prev) =>
+      prev.map((f) => {
+        if (f.status !== "uploading") return f;
+        const errorReason = fileErrors.get(f.file.name);
+        const failed = errorReason !== undefined;
+        return {
+          ...f,
+          progress: 100,
+          status: failed ? ("error" as UploadStatus) : ("success" as UploadStatus),
+          errorMessage: failed ? errorReason : undefined,
+        };
+      })
+    );
+
+    if (result.error) {
+      toast({ title: "Upload error", description: result.error });
+    } else {
+      toast({
+        title: `${result.data?.uploaded ?? 0} paper(s) uploaded`,
+        description: "Papers have been stored in ChromaDB.",
+      });
+      getDbStats().then((r) => r.data && setDbStats(r.data));
+    }
+  };
+
   const handleFetchDoi = async () => {
     if (!doiInput.trim()) return;
     setIsFetchingDoi(true);
     setDoiError(null);
-    // Simulate fetch
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    setIsFetchingDoi(false);
-    setDoiInput("");
-    toast({
-      title: "Papers fetched",
-      description: "2 papers fetched and stored successfully.",
-    });
+
+    try {
+      const lines = doiInput.split("\n").map((l) => l.trim()).filter(Boolean);
+      const result = await fetchPapersByDoi(lines);
+      if (result.error) throw new Error(result.error);
+      toast({ title: `${result.data?.fetched ?? 0} paper(s) fetched and stored.` });
+      setDoiInput("");
+      getDbStats().then((r) => r.data && setDbStats(r.data));
+    } catch (err) {
+      setDoiError(err instanceof Error ? err.message : "Fetch failed");
+    } finally {
+      setIsFetchingDoi(false);
+    }
   };
+
+  const pendingCount = uploadFiles.filter((f) => f.status === "idle").length;
 
   return (
     <div>
@@ -212,6 +229,11 @@ export default function UploadPage() {
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {uf.status === "idle" && (
+                        <span title="Pending upload">
+                          <Clock className="w-5 h-5 text-gray-400" />
+                        </span>
+                      )}
                       {uf.status === "success" && (
                         <CheckCircle className="w-5 h-5 text-green-500" />
                       )}
@@ -222,6 +244,7 @@ export default function UploadPage() {
                         onClick={() => removeFile(uf.id)}
                         className="text-gray-400 hover:text-gray-600 rounded-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
                         aria-label="Remove file"
+                        disabled={uf.status === "uploading"}
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -235,6 +258,9 @@ export default function UploadPage() {
                       </p>
                     </>
                   )}
+                  {uf.status === "idle" && (
+                    <p className="text-xs text-gray-400">Pending — ready to upload</p>
+                  )}
                   {uf.status === "success" && (
                     <p className="text-xs text-green-600">Stored successfully</p>
                   )}
@@ -243,6 +269,15 @@ export default function UploadPage() {
                   )}
                 </div>
               ))}
+
+              {pendingCount > 0 && (
+                <Button
+                  onClick={handleUploadAll}
+                  className="w-full sm:w-auto"
+                >
+                  Upload {pendingCount} File{pendingCount !== 1 ? "s" : ""}
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
@@ -290,19 +325,28 @@ export default function UploadPage() {
 
       {/* Status Bar */}
       <div className="flex items-center gap-4 text-sm text-gray-600 mb-6">
-        <span>{MOCK_DB_STATS.paperCount} papers stored</span>
+        <span>{dbStats?.paperCount ?? "—"} papers stored</span>
         <span>&middot;</span>
-        <span>{MOCK_DB_STATS.dbSizeMB} MB used</span>
+        <span>{dbStats?.dbSizeMB ?? "—"} MB used</span>
         <span>&middot;</span>
         <span className="flex items-center gap-1.5">
           ChromaDB:
           <span
-            className={cn(
-              "w-2 h-2 rounded-full inline-block",
-              MOCK_DB_STATS.isConnected ? "bg-green-500" : "bg-red-500"
-            )}
+            className={`w-2 h-2 rounded-full inline-block ${
+              dbStats === null
+                ? "bg-gray-300"
+                : dbStats.isConnected
+                ? "bg-green-500"
+                : "bg-red-400"
+            }`}
           />
-          {MOCK_DB_STATS.isConnected ? "Connected" : "Disconnected"}
+          <span className="text-gray-400">
+            {dbStats === null
+              ? "Checking..."
+              : dbStats.isConnected
+              ? "Connected"
+              : "Disconnected"}
+          </span>
         </span>
       </div>
 
@@ -310,64 +354,11 @@ export default function UploadPage() {
       <h2 className="text-lg font-semibold text-gray-900 mb-4">
         Papers in Your Library
       </h2>
-      {papers.length === 0 ? (
-        <EmptyState
-          icon={<FileText className="w-16 h-16" />}
-          title="No papers yet"
-          description="Upload a PDF or enter a DOI above to get started."
-        />
-      ) : (
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">
-                    Title
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">
-                    Authors
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">
-                    Year
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">
-                    Source
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">
-                    Added
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {papers.map((paper) => (
-                  <tr key={paper.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 max-w-xs">
-                      <p className="font-medium text-gray-900 truncate">
-                        {paper.title}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3 max-w-[160px]">
-                      <p className="text-gray-600 truncate">
-                        {paper.authors.slice(0, 2).join(", ")}
-                        {paper.authors.length > 2 &&
-                          ` +${paper.authors.length - 2}`}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{paper.year}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge variant={paper.source} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                      {formatRelativeTime(paper.dateAdded)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+      <EmptyState
+        icon={<FileText className="w-16 h-16" />}
+        title="No papers yet"
+        description="Upload a PDF or enter a DOI above to get started."
+      />
     </div>
   );
 }

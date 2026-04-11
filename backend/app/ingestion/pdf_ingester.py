@@ -3,6 +3,7 @@
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 
 from app.ingestion.pipeline import ingest_paper
 from app.tools.pdf_parser import extract_text_from_pdf, parse_pdf
@@ -51,6 +52,7 @@ async def ingest_pdf_file(pdf_path: str, original_filename: str) -> dict:
         "year": "",
         "source": "local",
         "doi": "",
+        "date_added": datetime.now(timezone.utc).isoformat(),
     }
 
     chunk_count = await ingest_paper(extracted["text"], metadata)

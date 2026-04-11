@@ -154,6 +154,23 @@ async def list_papers(page: int = 1, page_size: int = 20) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/papers/{paper_id}
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/{paper_id}")
+async def get_paper(paper_id: str) -> dict:
+    """Fetch a single paper by paper_id from ChromaDB."""
+    collection = vector_store.get_collection()
+    results = collection.get(where={"paper_id": paper_id})
+    metadatas = results.get("metadatas") or []
+    if not metadatas:
+        raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found")
+
+    paper = _build_paper_response(metadatas[0])
+    return {"data": paper, "error": None, "status": 200}
+
+
+# ---------------------------------------------------------------------------
 # DELETE /api/papers/{paper_id}
 # ---------------------------------------------------------------------------
 

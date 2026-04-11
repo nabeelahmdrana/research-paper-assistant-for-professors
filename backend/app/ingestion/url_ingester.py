@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 
@@ -113,6 +114,7 @@ async def ingest_by_doi_or_url(doi_or_url: str) -> dict:
         "year": year,
         "source": "external",
         "doi": doi,
+        "date_added": datetime.now(timezone.utc).isoformat(),
     }
 
     chunk_count = await ingest_url(url, metadata)

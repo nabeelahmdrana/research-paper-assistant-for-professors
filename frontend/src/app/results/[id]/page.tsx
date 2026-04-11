@@ -16,8 +16,8 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/StatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { toast } from "@/components/ui/use-toast";
-import { MOCK_QUERIES } from "@/lib/mockData";
 import type { QueryResult } from "@/lib/types";
+import { getQueryResult } from "@/lib/api";
 
 function formatDate(isoDate: string): string {
   return new Date(isoDate).toLocaleDateString("en-US", {
@@ -36,17 +36,11 @@ export default function ResultDetailPage() {
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    // Simulate async fetch
-    const timer = setTimeout(() => {
-      const found = MOCK_QUERIES.find((q) => q.id === id) ?? null;
-      if (found) {
-        setResult(found);
-      } else {
-        setNotFound(true);
-      }
+    getQueryResult(id).then((r) => {
+      if (r.data) setResult(r.data);
+      else setNotFound(true);
       setIsLoading(false);
-    }, 300);
-    return () => clearTimeout(timer);
+    });
   }, [id]);
 
   const buildFullText = (r: QueryResult): string => {
@@ -112,7 +106,7 @@ export default function ResultDetailPage() {
           Review not found
         </h2>
         <p className="text-sm text-gray-500 mb-6">
-          The review with ID &ldquo;{id}&rdquo; does not exist.
+          The review with ID &ldquo;{id}&rdquo; does not exist or the backend is not connected.
         </p>
         <Button variant="outline" asChild>
           <Link href="/query">

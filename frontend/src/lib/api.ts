@@ -132,7 +132,7 @@ export async function listQueryResults(): Promise<
 
 export async function uploadPapers(
   files: File[]
-): Promise<ApiResponse<{ uploaded: number; papers: Paper[] }>> {
+): Promise<ApiResponse<{ uploaded: number; papers: Paper[]; errors: string[] }>> {
   try {
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f));
@@ -148,13 +148,14 @@ export async function uploadPapers(
       data: {
         uploaded: rawData.uploaded ?? 0,
         papers: (rawData.papers ?? []).map(mapPaper),
+        errors: rawData.errors ?? [],
       },
       error: body.error ?? null,
       status: res.status,
     };
   } catch (err) {
     return {
-      data: { uploaded: 0, papers: [] },
+      data: { uploaded: 0, papers: [], errors: [] },
       error: err instanceof Error ? err.message : "Upload failed",
       status: 0,
     };
@@ -202,6 +203,12 @@ export async function listPapers(): Promise<
     error: null,
     status: res.status,
   };
+}
+
+export async function getPaper(id: string): Promise<ApiResponse<Paper>> {
+  const res = await apiFetch<Record<string, unknown>>(`/api/papers/${id}`);
+  if (res.error || !res.data) return { data: null, error: res.error, status: res.status };
+  return { data: mapPaper(res.data), error: null, status: res.status };
 }
 
 export async function deletePaper(

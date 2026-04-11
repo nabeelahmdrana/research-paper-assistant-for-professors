@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BookOpen, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { checkHealth } from "@/lib/api";
 
 const navLinks = [
   { href: "/", label: "Dashboard" },
@@ -13,9 +14,30 @@ const navLinks = [
   { href: "/library", label: "Library" },
 ];
 
+type ConnectionStatus = "checking" | "connected" | "disconnected";
+
 export function Navbar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("checking");
+
+  useEffect(() => {
+    checkHealth()
+      .then((h) => setConnectionStatus(h.status === "ok" ? "connected" : "disconnected"))
+      .catch(() => setConnectionStatus("disconnected"));
+  }, []);
+
+  const statusDot = {
+    checking: "bg-yellow-400",
+    connected: "bg-green-500",
+    disconnected: "bg-red-400",
+  }[connectionStatus];
+
+  const statusLabel = {
+    checking: "Checking...",
+    connected: "Connected",
+    disconnected: "Disconnected",
+  }[connectionStatus];
 
   return (
     <header className="sticky top-0 z-50 bg-white border-b border-gray-200">
@@ -46,8 +68,8 @@ export function Navbar() {
 
         {/* Status indicator */}
         <div className="hidden md:flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-          <span className="text-xs text-gray-500">Connected</span>
+          <span className={cn("w-2 h-2 rounded-full inline-block", statusDot)} />
+          <span className="text-xs text-gray-500">{statusLabel}</span>
         </div>
 
         {/* Mobile hamburger */}
@@ -79,8 +101,8 @@ export function Navbar() {
             </Link>
           ))}
           <div className="flex items-center gap-2 pt-2 border-t border-gray-200">
-            <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-            <span className="text-xs text-gray-500">Connected</span>
+            <span className={cn("w-2 h-2 rounded-full inline-block", statusDot)} />
+            <span className="text-xs text-gray-500">{statusLabel}</span>
           </div>
         </div>
       )}

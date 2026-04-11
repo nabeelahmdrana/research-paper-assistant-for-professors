@@ -94,6 +94,9 @@ async def list_papers() -> list[dict]:
                     "year": meta.get("year", ""),
                     "source": meta.get("source", ""),
                     "doi": meta.get("doi", ""),
+                    "abstract": meta.get("abstract", ""),
+                    "url": meta.get("url", ""),
+                    "date_added": meta.get("date_added", ""),
                 }
             )
 
