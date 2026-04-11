@@ -150,18 +150,20 @@ async def test_analysis_agent_calls_claude_and_parses_json() -> None:
 
     claude_response_json = '{"summary":"Transformers dominate NLP.","agreements":["Self-attention scales [1]"],"contradictions":[],"researchGaps":["Efficiency at scale"],"citations":[{"index":1,"title":"Attention Is All You Need","authors":["Vaswani"],"year":2017,"source":"local","doi":"10.1234/test","url":""}]}'
 
-    mock_content = MagicMock()
-    mock_content.text = claude_response_json
+    mock_message = MagicMock()
+    mock_message.content = claude_response_json
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
     mock_response = MagicMock()
-    mock_response.content = [mock_content]
+    mock_response.choices = [mock_choice]
 
     state: dict[str, Any] = {"question": "What are transformers?", "local_results": chunks, "local_sufficient": True, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None}
 
     with patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock) as mock_query, \
-         patch("app.agents.analysis_agent.AsyncAnthropic") as mock_anthropic_cls:
+         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_anthropic_cls:
         mock_query.return_value = chunks
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_anthropic_cls.return_value = mock_client
 
         state = await analysis_agent(state)
@@ -200,19 +202,21 @@ async def test_supervisor_local_path() -> None:
     sufficient_chunks = [_make_chunk(f"p{i}") for i in range(settings.min_relevant_chunks + 1)]
 
     claude_json = '{"summary":"Local summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
-    mock_content = MagicMock()
-    mock_content.text = claude_json
+    mock_message = MagicMock()
+    mock_message.content = claude_json
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
     mock_response = MagicMock()
-    mock_response.content = [mock_content]
+    mock_response.choices = [mock_choice]
 
     with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
          patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
-         patch("app.agents.analysis_agent.AsyncAnthropic") as mock_cls, \
+         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
          patch("app.agents.external_search_agent.search_semantic_scholar", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.external_search_agent.search_arxiv", new_callable=AsyncMock, return_value=[]):
 
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_cls.return_value = mock_client
 
         result = await run_research_pipeline("What are transformers?")
@@ -233,20 +237,22 @@ async def test_supervisor_external_path() -> None:
     ]
 
     claude_json = '{"summary":"External summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
-    mock_content = MagicMock()
-    mock_content.text = claude_json
+    mock_message = MagicMock()
+    mock_message.content = claude_json
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
     mock_response = MagicMock()
-    mock_response.content = [mock_content]
+    mock_response.choices = [mock_choice]
 
     with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.external_search_agent.search_semantic_scholar", new_callable=AsyncMock, return_value=external_papers), \
          patch("app.agents.external_search_agent.search_arxiv", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.process_agent.ingest_paper", new_callable=AsyncMock, return_value=2), \
          patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.analysis_agent.AsyncAnthropic") as mock_cls:
+         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls:
 
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_cls.return_value = mock_client
 
         result = await run_research_pipeline("novel topic with no local papers")
