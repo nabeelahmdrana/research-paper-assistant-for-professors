@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import { Navbar } from "@/components/Navbar";
+import { Toaster } from "@/components/ui/toaster";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Research Paper Assistant",
@@ -13,16 +18,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <nav className="border-b px-6 py-4 flex gap-6">
-          <a href="/" className="font-semibold text-blue-600">
-            Research Query
-          </a>
-          <a href="/upload" className="font-semibold text-blue-600">
-            Paper Library
-          </a>
-        </nav>
-        <main className="container mx-auto px-6 py-8">{children}</main>
+      <body className={inter.className}>
+        <Navbar />
+        <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+        <Toaster />
       </body>
     </html>
   );
