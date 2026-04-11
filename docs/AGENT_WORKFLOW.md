@@ -29,7 +29,7 @@ Development is **strictly sequential** by phase. Each phase must be tested, revi
 
 | Phase | Agent(s) | Status | GitHub Tag |
 |-------|----------|--------|------------|
-| 1 — UI/UX Wireframes | ui-ux | pending | — |
+| 1 — UI/UX Wireframes | ui-ux | complete | — |
 | 2 — Frontend UI | frontend | pending | — |
 | 3 — Backend Core | backend | pending | — |
 | 4 — API Layer | api-developer | pending | — |
