@@ -1,89 +1,244 @@
 // API client for FastAPI backend
-// Phase 2: return mock data
-// Phase 4 (api-developer): replace mocks with real fetch calls
+// All functions call the real FastAPI endpoints.
 
 import type { Paper, QueryResult, DbStats, ApiResponse } from "./types";
-import {
-  MOCK_PAPERS,
-  MOCK_QUERIES,
-  MOCK_DB_STATS,
-} from "./mockData";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// --- Research Query ---
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function apiFetch<T>(
+  path: string,
+  init?: RequestInit
+): Promise<ApiResponse<T>> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...init,
+    });
+    const body = await res.json();
+    return {
+      data: body.data ?? null,
+      error: body.error ?? null,
+      status: res.status,
+    };
+  } catch (err) {
+    return {
+      data: null,
+      error: err instanceof Error ? err.message : "Network error",
+      status: 0,
+    };
+  }
+}
+
+/** Map a raw backend paper dict to the frontend Paper type. */
+function mapPaper(raw: Record<string, unknown>): Paper {
+  return {
+    id: String(raw["id"] ?? ""),
+    title: String(raw["title"] ?? ""),
+    authors: Array.isArray(raw["authors"])
+      ? (raw["authors"] as string[])
+      : [String(raw["authors"] ?? "")],
+    year: Number(raw["year"] ?? 0),
+    source: (raw["source"] as Paper["source"]) ?? "pdf",
+    abstract: String(raw["abstract"] ?? ""),
+    dateAdded: String(raw["dateAdded"] ?? ""),
+    doi: raw["doi"] ? String(raw["doi"]) : undefined,
+    url: raw["url"] ? String(raw["url"]) : undefined,
+  };
+}
+
+/** Map a raw backend result dict to the frontend QueryResult type. */
+function mapQueryResult(raw: Record<string, unknown>): QueryResult {
+  const rawCitations = Array.isArray(raw["citations"]) ? raw["citations"] : [];
+  return {
+    id: String(raw["id"] ?? ""),
+    question: String(raw["question"] ?? ""),
+    createdAt: String(raw["createdAt"] ?? raw["created_at"] ?? ""),
+    summary: String(raw["summary"] ?? ""),
+    agreements: Array.isArray(raw["agreements"])
+      ? (raw["agreements"] as string[])
+      : [],
+    contradictions: Array.isArray(raw["contradictions"])
+      ? (raw["contradictions"] as string[])
+      : [],
+    researchGaps: Array.isArray(raw["researchGaps"])
+      ? (raw["researchGaps"] as string[])
+      : Array.isArray(raw["research_gaps"])
+        ? (raw["research_gaps"] as string[])
+        : [],
+    citations: (rawCitations as Record<string, unknown>[]).map((c) => ({
+      index: Number(c["index"] ?? 0),
+      title: String(c["title"] ?? ""),
+      authors: Array.isArray(c["authors"])
+        ? (c["authors"] as string[])
+        : [String(c["authors"] ?? "")],
+      year: Number(c["year"] ?? 0),
+      source: (c["source"] as "local" | "external") ?? "local",
+      doi: c["doi"] ? String(c["doi"]) : undefined,
+      url: c["url"] ? String(c["url"]) : undefined,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Research Query
+// ---------------------------------------------------------------------------
 
 export async function runResearchQuery(
   question: string
 ): Promise<ApiResponse<QueryResult>> {
-  // TODO (api-developer): replace with real fetch to POST /api/research
-  void question;
-  const result = MOCK_QUERIES[0];
-  return { data: result ?? null, error: null, status: 200 };
+  const res = await apiFetch<Record<string, unknown>>("/api/research", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+  if (res.error || !res.data) return { data: null, error: res.error, status: res.status };
+  return { data: mapQueryResult(res.data), error: null, status: res.status };
 }
 
 export async function getQueryResult(
   id: string
 ): Promise<ApiResponse<QueryResult>> {
-  // TODO (api-developer): replace with real fetch to GET /api/research/:id
-  const result = MOCK_QUERIES.find((q) => q.id === id) ?? null;
-  if (!result) {
-    return { data: null, error: "Query result not found", status: 404 };
-  }
-  return { data: result, error: null, status: 200 };
+  const res = await apiFetch<Record<string, unknown>>(`/api/research/${id}`);
+  if (res.error || !res.data) return { data: null, error: res.error, status: res.status };
+  return { data: mapQueryResult(res.data), error: null, status: res.status };
 }
 
 export async function listQueryResults(): Promise<
   ApiResponse<{ results: QueryResult[]; total: number }>
 > {
-  // TODO (api-developer): replace with real fetch to GET /api/research
+  const res = await apiFetch<{
+    results: Record<string, unknown>[];
+    total: number;
+  }>("/api/research");
+  if (res.error || !res.data) {
+    return { data: { results: [], total: 0 }, error: res.error, status: res.status };
+  }
   return {
-    data: { results: MOCK_QUERIES, total: MOCK_QUERIES.length },
+    data: {
+      results: (res.data.results ?? []).map(mapQueryResult),
+      total: res.data.total ?? 0,
+    },
     error: null,
-    status: 200,
+    status: res.status,
   };
 }
 
-// --- Paper Management ---
+// ---------------------------------------------------------------------------
+// Paper Management
+// ---------------------------------------------------------------------------
 
 export async function uploadPapers(
   files: File[]
 ): Promise<ApiResponse<{ uploaded: number; papers: Paper[] }>> {
-  // TODO (api-developer): replace with real fetch to POST /api/papers/upload
-  void files;
-  return { data: { uploaded: 0, papers: [] }, error: null, status: 200 };
+  try {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+
+    const res = await fetch(`${API_BASE}/api/papers/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const body = await res.json();
+
+    const rawData = body.data ?? {};
+    return {
+      data: {
+        uploaded: rawData.uploaded ?? 0,
+        papers: (rawData.papers ?? []).map(mapPaper),
+      },
+      error: body.error ?? null,
+      status: res.status,
+    };
+  } catch (err) {
+    return {
+      data: { uploaded: 0, papers: [] },
+      error: err instanceof Error ? err.message : "Upload failed",
+      status: 0,
+    };
+  }
 }
 
 export async function fetchPapersByDoi(
   doisOrUrls: string[]
 ): Promise<ApiResponse<{ fetched: number; papers: Paper[] }>> {
-  // TODO (api-developer): replace with real fetch to POST /api/papers/doi
-  void doisOrUrls;
-  return { data: { fetched: 0, papers: [] }, error: null, status: 200 };
+  const res = await apiFetch<{
+    fetched: number;
+    papers: Record<string, unknown>[];
+  }>("/api/papers/doi", {
+    method: "POST",
+    body: JSON.stringify({ dois: doisOrUrls }),
+  });
+  if (res.error || !res.data) {
+    return { data: { fetched: 0, papers: [] }, error: res.error, status: res.status };
+  }
+  return {
+    data: {
+      fetched: res.data.fetched ?? 0,
+      papers: (res.data.papers ?? []).map(mapPaper),
+    },
+    error: null,
+    status: res.status,
+  };
 }
 
 export async function listPapers(): Promise<
   ApiResponse<{ papers: Paper[]; total: number }>
 > {
-  // TODO (api-developer): replace with real fetch to GET /api/papers
+  const res = await apiFetch<{
+    papers: Record<string, unknown>[];
+    total: number;
+  }>("/api/papers");
+  if (res.error || !res.data) {
+    return { data: { papers: [], total: 0 }, error: res.error, status: res.status };
+  }
   return {
-    data: { papers: MOCK_PAPERS, total: MOCK_PAPERS.length },
+    data: {
+      papers: (res.data.papers ?? []).map(mapPaper),
+      total: res.data.total ?? 0,
+    },
     error: null,
-    status: 200,
+    status: res.status,
   };
 }
 
 export async function deletePaper(
   id: string
 ): Promise<ApiResponse<{ deleted: boolean }>> {
-  // TODO (api-developer): replace with real fetch to DELETE /api/papers/:id
-  void id;
-  return { data: { deleted: true }, error: null, status: 200 };
+  const res = await apiFetch<{ deleted: boolean; paper_id: string }>(
+    `/api/papers/${id}`,
+    { method: "DELETE" }
+  );
+  if (res.error || !res.data) {
+    return { data: { deleted: false }, error: res.error, status: res.status };
+  }
+  return { data: { deleted: res.data.deleted }, error: null, status: res.status };
 }
 
 export async function getDbStats(): Promise<ApiResponse<DbStats>> {
-  // TODO (api-developer): replace with real fetch to GET /api/stats
-  return { data: MOCK_DB_STATS, error: null, status: 200 };
+  const res = await apiFetch<{
+    paperCount: number;
+    dbSizeMB: number;
+    isConnected: boolean;
+  }>("/api/stats");
+  if (res.error || !res.data) {
+    return {
+      data: { paperCount: 0, dbSizeMB: 0, isConnected: false },
+      error: res.error,
+      status: res.status,
+    };
+  }
+  return {
+    data: {
+      paperCount: res.data.paperCount ?? 0,
+      dbSizeMB: res.data.dbSizeMB ?? 0,
+      isConnected: res.data.isConnected ?? false,
+    },
+    error: null,
+    status: res.status,
+  };
 }
 
 export async function checkHealth(): Promise<{

@@ -1,13 +1,11 @@
 # Phase 3 (backend agent): ingestion tests
 # Covers: PDF parsing, text chunking, ChromaDB storage, query, list, delete
 
-import io
 import os
 import shutil
 import tempfile
 
 import pytest
-import pytest_asyncio
 from pypdf import PdfWriter
 
 # ---------------------------------------------------------------------------
@@ -66,12 +64,7 @@ def sample_pdf_path():
 
     # Add font resource and content stream directly via compress_content_streams
     from pypdf.generic import (
-        ArrayObject,
-        ContentStream,
         DecodedStreamObject,
-        DictionaryObject,
-        NameObject,
-        RectangleObject,
     )
 
     # Embed text as a raw content stream on the page object

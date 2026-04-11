@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import papers, research
 from app.config import settings
 from app.tools import vector_store
 
@@ -14,10 +15,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Phase 4 (api-developer): uncomment and register routers
-# from app.api import research, papers
-# app.include_router(research.router, prefix="/api")
-# app.include_router(papers.router, prefix="/api")
+app.include_router(papers.router, prefix="/api")
+app.include_router(research.router, prefix="/api")
 
 
 @app.get("/api/health")
