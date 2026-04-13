@@ -13,10 +13,7 @@ langchain>=0.2.0
 langchain-community>=0.2.0
 langchain-text-splitters>=0.2.0
 langgraph>=0.1.5
-anthropic>=0.40.0
-
-# Embeddings
-sentence-transformers>=3.0.0
+openai>=1.40.0
 
 # PDF Parsing
 pypdf>=4.2.0
