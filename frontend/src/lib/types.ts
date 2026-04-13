@@ -29,6 +29,19 @@ export interface QueryResult {
   contradictions: string[];
   researchGaps: string[];
   citations: Citation[];
+  externalPapersFetched: boolean;
+  newPapersCount: number;
+}
+
+export interface ExternalPaper {
+  paper_id: string;
+  title: string;
+  authors: string[];
+  year: number | string;
+  abstract: string;
+  doi: string;
+  url: string;
+  source: "external";
 }
 
 export interface DbStats {

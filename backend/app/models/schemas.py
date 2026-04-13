@@ -36,6 +36,8 @@ class ResearchResult(BaseModel):
     contradictions: list[str]
     research_gaps: list[str]
     citations: list[Citation]
+    external_papers_fetched: bool = False
+    new_papers_count: int = 0
 
 
 class DbStats(BaseModel):

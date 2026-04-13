@@ -1,19 +1,47 @@
 """Research query API endpoints.
 
 Phase 4: accepts queries and returns results from the RAG pipeline.
-The pipeline is imported from app.agents.supervisor; Phase 5 implements it.
+Results are persisted to a JSON file so they survive server restarts.
 """
+
+import json
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.agents.supervisor import run_research_pipeline
+from app.config import settings
 
 router = APIRouter()
 
-# In-memory store for query results keyed by result id.
-# Survives for the lifetime of the server process.
-_results_store: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Persistent result store backed by a JSON file
+# ---------------------------------------------------------------------------
+
+def _results_file() -> Path:
+    return Path(settings.results_store_path)
+
+
+def _load_results() -> dict[str, dict]:
+    f = _results_file()
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_results(results: dict[str, dict]) -> None:
+    f = _results_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+
+
+# Load existing results at module import so GET endpoints work immediately
+_results_store: dict[str, dict] = _load_results()
 
 
 class ResearchQueryRequest(BaseModel):
@@ -40,8 +68,9 @@ async def run_research(body: ResearchQueryRequest) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    # Cache result for retrieval
+    # Persist result
     _results_store[result["id"]] = result
+    _save_results(_results_store)
 
     return {"data": result, "error": None, "status": 200}
 
@@ -66,9 +95,8 @@ async def get_research_result(result_id: str) -> dict:
 
 @router.get("/research")
 async def list_research_results() -> dict:
-    """List all cached research results (most recent first)."""
+    """List all persisted research results (most recent first)."""
     results = list(_results_store.values())
-    # Sort by createdAt descending if present
     results.sort(key=lambda r: r.get("createdAt", ""), reverse=True)
 
     return {

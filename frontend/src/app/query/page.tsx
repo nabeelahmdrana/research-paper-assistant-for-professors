@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { Search, CheckCircle, Circle, ExternalLink } from "lucide-react";
+import { Search, CheckCircle, Circle, ExternalLink, BookPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -146,6 +146,17 @@ export default function QueryPage() {
             message={error}
             onRetry={handleRetry}
           />
+        </div>
+      )}
+
+      {/* External Papers Notification */}
+      {result && !isLoading && result.externalPapersFetched && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <BookPlus className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+          <p className="text-sm text-blue-700">
+            <span className="font-semibold">{result.newPapersCount} new paper{result.newPapersCount !== 1 ? "s" : ""}</span>
+            {" "}were fetched from external sources and saved to your library.
+          </p>
         </div>
       )}
 

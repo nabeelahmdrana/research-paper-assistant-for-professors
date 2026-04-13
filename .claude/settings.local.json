@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npm install:*)",
-      "Bash(pip index:*)"
+      "Bash(pip index:*)",
+      "Bash(backend/venv/bin/pip install:*)",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

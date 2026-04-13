@@ -1,12 +1,15 @@
+import asyncio
 import os
 import tempfile
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from app.agents.external_search_agent import _call_mcp_tool
 from app.config import settings
 from app.ingestion.pdf_ingester import ingest_pdf_file
+from app.ingestion.pipeline import ingest_paper
 from app.ingestion.url_ingester import ingest_by_doi_or_url
 from app.tools import vector_store
 
@@ -148,6 +151,138 @@ async def list_papers(page: int = 1, page_size: int = 20) -> dict:
 
     return {
         "data": {"papers": papers, "total": total, "page": page, "page_size": page_size},
+        "error": None,
+        "status": 200,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/search  — search external databases via MCP (no storage)
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/search")
+async def search_external_papers(
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    """Search Semantic Scholar + arXiv via the MCP server.
+
+    Returns matching papers for preview. Nothing is stored until the user
+    explicitly calls POST /api/papers/import.
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    ss_papers, arxiv_papers = await asyncio.gather(
+        _call_mcp_tool("search_papers", {"query": q, "limit": limit}),
+        _call_mcp_tool("search_arxiv_papers", {"query": q, "limit": limit}),
+    )
+
+    # Normalise to unified structure
+    combined: list[dict] = []
+    for paper in ss_papers:
+        combined.append({
+            "paper_id": paper.get("paperId") or "",
+            "title": paper.get("title", ""),
+            "authors": paper.get("authors", []),
+            "year": paper.get("year", ""),
+            "abstract": paper.get("abstract", ""),
+            "doi": paper.get("doi", ""),
+            "url": paper.get("url", ""),
+            "source": "external",
+        })
+    for paper in arxiv_papers:
+        combined.append({
+            "paper_id": paper.get("arxiv_id") or "",
+            "title": paper.get("title", ""),
+            "authors": paper.get("authors", []),
+            "year": paper.get("year", ""),
+            "abstract": paper.get("abstract", ""),
+            "doi": paper.get("doi", ""),
+            "url": paper.get("url", ""),
+            "source": "external",
+        })
+
+    # Deduplicate by lowercased title
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for paper in combined:
+        key = paper["title"].lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(paper)
+
+    return {
+        "data": {"papers": deduped, "total": len(deduped)},
+        "error": None,
+        "status": 200,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/import  — ingest selected external papers into ChromaDB
+# ---------------------------------------------------------------------------
+
+class ImportPapersRequest(BaseModel):
+    papers: list[dict]
+
+
+@router.post("/papers/import")
+async def import_external_papers(body: ImportPapersRequest) -> dict:
+    """Ingest a list of external papers (from search results) into ChromaDB.
+
+    Only papers with a non-empty abstract are stored.
+    Returns the count of papers imported and total chunks stored.
+    """
+    if not body.papers:
+        raise HTTPException(status_code=400, detail="No papers provided")
+
+    imported = 0
+    total_chunks = 0
+    errors: list[str] = []
+
+    for paper in body.papers:
+        abstract = (paper.get("abstract") or "").strip()
+        title = (paper.get("title") or "").strip()
+        if not abstract:
+            errors.append(f'"{title}": skipped (no abstract)')
+            continue
+
+        authors_raw = paper.get("authors", [])
+        authors_str = (
+            ", ".join(authors_raw) if isinstance(authors_raw, list) else str(authors_raw)
+        )
+
+        paper_id = (paper.get("paper_id") or "").strip()
+        if not paper_id:
+            import re
+            slug = re.sub(r"[^a-z0-9]+", "_", title.lower())[:40]
+            paper_id = f"ext_{slug}"
+
+        metadata = {
+            "paper_id": paper_id,
+            "title": title,
+            "authors": authors_str,
+            "year": str(paper.get("year", "")),
+            "source": "external",
+            "doi": paper.get("doi", "") or "",
+            "url": paper.get("url", "") or "",
+            "date_added": datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            chunks = await ingest_paper(abstract, metadata)
+            total_chunks += chunks
+            imported += 1
+        except Exception as exc:
+            errors.append(f'"{title}": {exc}')
+
+    return {
+        "data": {
+            "imported": imported,
+            "chunks": total_chunks,
+            "errors": errors,
+        },
         "error": None,
         "status": 200,
     }

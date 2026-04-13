@@ -1,3 +1,6 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,7 +8,22 @@ from app.api import papers, research
 from app.config import settings
 from app.tools import vector_store
 
-app = FastAPI(title="Research Paper Assistant API", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-warm the embedding model and ChromaDB on startup."""
+    try:
+        logger.info("Pre-loading embedding model and ChromaDB collection...")
+        vector_store.get_collection()
+        logger.info("Embedding model and ChromaDB ready.")
+    except Exception as exc:
+        logger.warning("Startup pre-warm failed (non-fatal): %s", exc)
+    yield
+
+
+app = FastAPI(title="Research Paper Assistant API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

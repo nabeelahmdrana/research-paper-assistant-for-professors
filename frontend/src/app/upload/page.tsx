@@ -1,20 +1,23 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { UploadCloud, FileText, CheckCircle, XCircle, X, Clock } from "lucide-react";
+import { UploadCloud, FileText, CheckCircle, XCircle, X, Clock, Search, BookPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import { uploadPapers, fetchPapersByDoi, getDbStats } from "@/lib/api";
-import type { DbStats } from "@/lib/types";
+import { uploadPapers, fetchPapersByDoi, getDbStats, searchExternalPapers, importExternalPapers } from "@/lib/api";
+import type { DbStats, ExternalPaper } from "@/lib/types";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
@@ -40,6 +43,14 @@ export default function UploadPage() {
   const [doiError, setDoiError] = useState<string | null>(null);
   const [dbStats, setDbStats] = useState<DbStats | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Discover / external search state
+  const [discoverQuery, setDiscoverQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<ExternalPaper[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     getDbStats().then((r) => r.data && setDbStats(r.data));
@@ -151,6 +162,58 @@ export default function UploadPage() {
       setDoiError(err instanceof Error ? err.message : "Fetch failed");
     } finally {
       setIsFetchingDoi(false);
+    }
+  };
+
+  const handleDiscover = async () => {
+    if (!discoverQuery.trim()) return;
+    setIsSearching(true);
+    setSearchError(null);
+    setSearchResults([]);
+    setSelectedIds(new Set());
+    try {
+      const res = await searchExternalPapers(discoverQuery.trim(), 10);
+      if (res.error) throw new Error(res.error);
+      setSearchResults(res.data?.papers ?? []);
+      if ((res.data?.total ?? 0) === 0) {
+        setSearchError("No papers found. Try a different query.");
+      }
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Search failed");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const toggleSelect = (paperId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(paperId) ? next.delete(paperId) : next.add(paperId);
+      return next;
+    });
+  };
+
+  const handleImportSelected = async () => {
+    const toImport = searchResults.filter((p) => selectedIds.has(p.paper_id));
+    if (toImport.length === 0) return;
+    setIsImporting(true);
+    try {
+      const res = await importExternalPapers(toImport);
+      if (res.error) throw new Error(res.error);
+      toast({
+        title: `${res.data?.imported ?? 0} paper(s) imported`,
+        description: `${res.data?.chunks ?? 0} chunks stored in ChromaDB.`,
+      });
+      setSelectedIds(new Set());
+      getDbStats().then((r) => r.data && setDbStats(r.data));
+    } catch (err) {
+      toast({
+        title: "Import failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -318,6 +381,150 @@ export default function UploadPage() {
               "Fetch & Store"
             )}
           </Button>
+        </CardContent>
+      </Card>
+
+      <Separator className="my-6" />
+
+      {/* Discover / External Search Section */}
+      <Card className="mb-6">
+        <CardContent className="p-6">
+          <h2 className="text-base font-semibold text-gray-700 mb-1">
+            SEARCH EXTERNAL DATABASES
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Search Semantic Scholar + arXiv via the MCP server. Preview results and selectively import into your local library.
+          </p>
+
+          <div className="flex gap-2 mb-4">
+            <Input
+              value={discoverQuery}
+              onChange={(e) => setDiscoverQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !isSearching && handleDiscover()}
+              placeholder="e.g. transformer attention mechanism, BERT language model..."
+              className="flex-1"
+              disabled={isSearching}
+            />
+            <Button
+              onClick={handleDiscover}
+              disabled={isSearching || !discoverQuery.trim()}
+            >
+              {isSearching ? (
+                <LoadingSpinner size="sm" className="mr-2" />
+              ) : (
+                <Search className="w-4 h-4 mr-2" />
+              )}
+              {isSearching ? "Searching..." : "Search"}
+            </Button>
+          </div>
+
+          {searchError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertTitle>Search error</AlertTitle>
+              <AlertDescription>{searchError}</AlertDescription>
+            </Alert>
+          )}
+
+          {searchResults.length > 0 && (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-gray-600">
+                  {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} found
+                  {selectedIds.size > 0 && (
+                    <span className="ml-1 text-blue-600 font-medium">
+                      · {selectedIds.size} selected
+                    </span>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setSelectedIds(new Set(searchResults.map((p) => p.paper_id)))
+                    }
+                    className="text-xs"
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedIds(new Set())}
+                    className="text-xs"
+                    disabled={selectedIds.size === 0}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2 mb-4 max-h-[480px] overflow-y-auto pr-1">
+                {searchResults.map((paper) => (
+                  <div
+                    key={paper.paper_id}
+                    className={cn(
+                      "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+                      selectedIds.has(paper.paper_id)
+                        ? "border-blue-300 bg-blue-50"
+                        : "border-gray-200 hover:border-gray-300 bg-white"
+                    )}
+                    onClick={() => toggleSelect(paper.paper_id)}
+                  >
+                    <Checkbox
+                      checked={selectedIds.has(paper.paper_id)}
+                      onCheckedChange={() => toggleSelect(paper.paper_id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start gap-2 mb-0.5">
+                        <p className="text-sm font-semibold text-gray-900 leading-snug flex-1">
+                          {paper.title}
+                        </p>
+                        <Badge variant="outline" className="text-xs shrink-0">
+                          external
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-1">
+                        {paper.authors.slice(0, 3).join(", ")}
+                        {paper.authors.length > 3 && " et al."}
+                        {paper.year ? ` · ${paper.year}` : ""}
+                      </p>
+                      {paper.abstract && (
+                        <p className="text-xs text-gray-600 line-clamp-2">
+                          {paper.abstract}
+                        </p>
+                      )}
+                      {!paper.abstract && (
+                        <p className="text-xs text-amber-600 italic">
+                          No abstract — will be skipped during import
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                onClick={handleImportSelected}
+                disabled={selectedIds.size === 0 || isImporting}
+                className="w-full sm:w-auto"
+              >
+                {isImporting ? (
+                  <>
+                    <LoadingSpinner size="sm" className="mr-2" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <BookPlus className="w-4 h-4 mr-2" />
+                    Import Selected ({selectedIds.size})
+                  </>
+                )}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 

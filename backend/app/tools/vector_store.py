@@ -6,17 +6,22 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 
 from app.config import settings
 
+_collection: chromadb.Collection | None = None
+
 
 def get_collection() -> chromadb.Collection:
-    """Initialize and return the ChromaDB collection."""
-    embedding_fn = SentenceTransformerEmbeddingFunction(
-        model_name=settings.embedding_model
-    )
-    client = chromadb.PersistentClient(path=settings.chroma_db_path)
-    return client.get_or_create_collection(
-        name=settings.chroma_collection_name,
-        embedding_function=embedding_fn,
-    )
+    """Return the ChromaDB collection, creating it once and reusing it."""
+    global _collection
+    if _collection is None:
+        embedding_fn = SentenceTransformerEmbeddingFunction(
+            model_name=settings.embedding_model
+        )
+        client = chromadb.PersistentClient(path=settings.chroma_db_path)
+        _collection = client.get_or_create_collection(
+            name=settings.chroma_collection_name,
+            embedding_function=embedding_fn,
+        )
+    return _collection
 
 
 async def add_documents(chunks: list[dict]) -> None:

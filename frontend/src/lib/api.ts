@@ -1,7 +1,7 @@
 // API client for FastAPI backend
 // All functions call the real FastAPI endpoints.
 
-import type { Paper, QueryResult, DbStats, ApiResponse } from "./types";
+import type { Paper, QueryResult, DbStats, ApiResponse, ExternalPaper } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -80,6 +80,8 @@ function mapQueryResult(raw: Record<string, unknown>): QueryResult {
       doi: c["doi"] ? String(c["doi"]) : undefined,
       url: c["url"] ? String(c["url"]) : undefined,
     })),
+    externalPapersFetched: Boolean(raw["externalPapersFetched"] ?? false),
+    newPapersCount: Number(raw["newPapersCount"] ?? 0),
   };
 }
 
@@ -246,6 +248,41 @@ export async function getDbStats(): Promise<ApiResponse<DbStats>> {
     error: null,
     status: res.status,
   };
+}
+
+// ---------------------------------------------------------------------------
+// External Paper Search & Import (MCP-backed)
+// ---------------------------------------------------------------------------
+
+export async function searchExternalPapers(
+  query: string,
+  limit = 10
+): Promise<ApiResponse<{ papers: ExternalPaper[]; total: number }>> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  const res = await apiFetch<{ papers: ExternalPaper[]; total: number }>(
+    `/api/papers/search?${params}`
+  );
+  if (res.error || !res.data) {
+    return { data: { papers: [], total: 0 }, error: res.error, status: res.status };
+  }
+  return { data: res.data, error: null, status: res.status };
+}
+
+export async function importExternalPapers(
+  papers: ExternalPaper[]
+): Promise<ApiResponse<{ imported: number; chunks: number; errors: string[] }>> {
+  const res = await apiFetch<{ imported: number; chunks: number; errors: string[] }>(
+    "/api/papers/import",
+    { method: "POST", body: JSON.stringify({ papers }) }
+  );
+  if (res.error || !res.data) {
+    return {
+      data: { imported: 0, chunks: 0, errors: [] },
+      error: res.error,
+      status: res.status,
+    };
+  }
+  return { data: res.data, error: null, status: res.status };
 }
 
 export async function checkHealth(): Promise<{

@@ -4,9 +4,10 @@
   "description": "Local-first research paper assistant. Pre-load papers into ChromaDB, then ask research questions.",
   "private": true,
   "scripts": {
-    "dev": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\" --kill-others-on-fail \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && ./venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
-    "dev:frontend": "cd frontend && npm run dev"
+    "dev:frontend": "cd frontend && npm run dev",
+    "start": "bash start.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

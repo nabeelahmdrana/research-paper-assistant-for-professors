@@ -7,7 +7,7 @@ review: summary, agreements, contradictions, research gaps, and citations.
 
 import json
 
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.tools import vector_store
@@ -150,18 +150,16 @@ async def analysis_agent(state: dict) -> dict:
         "Now produce the JSON literature review following the format in the system prompt."
     )
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     try:
-        response = await client.chat.completions.create(
-            model=settings.openai_model,
+        response = await client.messages.create(
+            model=settings.claude_model,
             max_tokens=4096,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
         )
-        raw_text = (response.choices[0].message.content or "").strip()
+        raw_text = (response.content[0].text if response.content else "").strip()
 
         # Strip markdown code fences if Claude wraps in ```json ... ```
         if raw_text.startswith("```"):

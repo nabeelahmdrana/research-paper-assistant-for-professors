@@ -91,6 +91,13 @@ async def run_research_pipeline(question: str) -> dict:
 
     analysis = final_state.get("analysis", {})
 
+    external_papers = final_state.get("external_papers", [])
+    external_papers_fetched = (
+        not final_state.get("local_sufficient", True) and len(external_papers) > 0
+    )
+    # Count only papers that had an abstract (those actually ingested)
+    new_papers_count = len([p for p in external_papers if p.get("abstract")])
+
     return {
         "id": str(uuid.uuid4()),
         "question": question,
@@ -100,4 +107,6 @@ async def run_research_pipeline(question: str) -> dict:
         "contradictions": analysis.get("contradictions", []),
         "researchGaps": analysis.get("researchGaps", []),
         "citations": analysis.get("citations", []),
+        "externalPapersFetched": external_papers_fetched,
+        "newPapersCount": new_papers_count,
     }

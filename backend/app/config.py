@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-sonnet-4-6"
     chroma_db_path: str = "./chroma_db"
     chroma_collection_name: str = "research_papers"
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_file_size_mb: int = 50
     frontend_url: str = "http://localhost:3000"
+    results_store_path: str = "./research_results.json"
 
 
 settings = Settings()
