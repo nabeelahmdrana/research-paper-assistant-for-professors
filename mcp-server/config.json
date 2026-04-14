@@ -2,9 +2,30 @@
   "mcpServers": {
     "paper-search-mcp": {
       "command": "python",
-      "args": ["server.py"],
+      "args": ["paper_search_wrapper.py"],
       "cwd": "mcp-server",
-      "description": "Searches Semantic Scholar and arXiv for academic papers"
+      "description": "Multi-database academic paper search via openags/paper-search-mcp (mcpmarket.com)",
+      "databases": ["arXiv", "PubMed", "bioRxiv", "medRxiv"],
+      "tools": [
+        "search_arxiv",
+        "search_pubmed",
+        "search_biorxiv",
+        "search_medrxiv",
+        "search_google_scholar",
+        "download_arxiv",
+        "download_pubmed",
+        "read_arxiv_paper",
+        "read_pubmed_paper",
+        "read_biorxiv_paper",
+        "read_medrxiv_paper"
+      ],
+      "package": "paper-search-mcp",
+      "source": "https://mcpmarket.com/server/paper-search",
+      "github": "https://github.com/openags/paper-search-mcp",
+      "env": {
+        "PAPER_SEARCH_MCP_UNPAYWALL_EMAIL": "optional_email_for_unpaywall",
+        "PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY": "optional_for_better_rate_limits"
+      }
     }
   }
 }

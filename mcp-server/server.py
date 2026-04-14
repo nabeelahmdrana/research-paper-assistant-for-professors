@@ -89,7 +89,7 @@ async def search_arxiv_papers(query: str, limit: int = 10) -> list[dict]:
         List of paper dicts with keys: arxiv_id, title, authors, year,
         abstract, doi, url.
     """
-    url = "http://export.arxiv.org/api/query"
+    url = "https://export.arxiv.org/api/query"
     params = {
         "search_query": f"all:{query}",
         "start": 0,

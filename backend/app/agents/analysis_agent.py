@@ -150,7 +150,7 @@ async def analysis_agent(state: dict) -> dict:
         "Now produce the JSON literature review following the format in the system prompt."
     )
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
 
     try:
         response = await client.chat.completions.create(

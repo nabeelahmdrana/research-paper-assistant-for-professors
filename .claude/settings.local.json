@@ -4,7 +4,10 @@
       "Bash(npm install:*)",
       "Bash(pip index:*)",
       "Bash(backend/venv/bin/pip install:*)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "WebFetch(domain:mcpmarket.com)",
+      "WebSearch",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

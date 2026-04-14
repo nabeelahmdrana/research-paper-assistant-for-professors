@@ -2,7 +2,7 @@
 # All ChromaDB access in the project goes through this file only
 
 import chromadb
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 from app.config import settings
 
@@ -13,14 +13,15 @@ def get_collection() -> chromadb.Collection:
     """Return the ChromaDB collection, creating it once and reusing it."""
     global _collection
     if _collection is None:
-        embedding_fn = OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
+        # Use local sentence-transformers for embeddings — no API key required.
+        embedding_fn = SentenceTransformerEmbeddingFunction(
             model_name=settings.embedding_model,
         )
         client = chromadb.PersistentClient(path=settings.chroma_db_path)
         _collection = client.get_or_create_collection(
             name=settings.chroma_collection_name,
             embedding_function=embedding_fn,
+            metadata={"hnsw:space": "cosine"},
         )
     return _collection
 
