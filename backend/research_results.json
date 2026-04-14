@@ -1,482 +1,456 @@
 {
-  "9b6af78f-9c4b-41cd-ac44-f29d587a74e6": {
-    "id": "9b6af78f-9c4b-41cd-ac44-f29d587a74e6",
-    "question": "what is transformer",
-    "createdAt": "2026-04-13T09:26:03.659338+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": false,
-    "newPapersCount": 0
-  },
-  "744ee532-492b-45f7-a59f-7164859db481": {
-    "id": "744ee532-492b-45f7-a59f-7164859db481",
-    "question": "transformer",
-    "createdAt": "2026-04-13T09:26:17.980598+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": false,
-    "newPapersCount": 0
-  },
-  "9512f3e5-e915-4d6f-ba6a-c5c2ca573b34": {
-    "id": "9512f3e5-e915-4d6f-ba6a-c5c2ca573b34",
-    "question": "what is a transformer?",
-    "createdAt": "2026-04-13T10:51:39.395817+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": false,
-    "newPapersCount": 0
-  },
-  "a49a4295-c1f6-4217-a041-fa012463c33c": {
-    "id": "a49a4295-c1f6-4217-a041-fa012463c33c",
-    "question": "what is Artificial Intelligence",
-    "createdAt": "2026-04-13T10:52:06.311101+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": false,
-    "newPapersCount": 0
-  },
-  "e552538e-149c-4a40-bcf0-8ba972d0528e": {
-    "id": "e552538e-149c-4a40-bcf0-8ba972d0528e",
-    "question": "what are transformers",
-    "createdAt": "2026-04-13T11:22:55.255760+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": true,
-    "newPapersCount": 40
-  },
-  "9524ae94-0dc7-414b-a3ec-230045682c30": {
-    "id": "9524ae94-0dc7-414b-a3ec-230045682c30",
-    "question": "what is transformer",
-    "createdAt": "2026-04-13T11:31:17.922363+00:00",
-    "summary": "No relevant papers found for this query.",
-    "agreements": [],
-    "contradictions": [],
-    "researchGaps": [],
-    "citations": [],
-    "externalPapersFetched": true,
-    "newPapersCount": 30
-  },
-  "31fc72a7-c359-4fc1-9969-e5d33242d4e4": {
-    "id": "31fc72a7-c359-4fc1-9969-e5d33242d4e4",
-    "question": "what is transformer?",
-    "createdAt": "2026-04-13T11:40:02.192961+00:00",
-    "summary": "Across the provided excerpts, \u201cTransformer\u201d refers to a neural network architecture built around attention mechanisms, originally highlighted for NLP but now widely applied in vision, medical imaging, and graph/biomedical data modeling [1-3,6,10-13,21]. Multiple studies motivate Transformers by their ability to model global dependencies/context and to integrate information across modalities via (cross-)attention, often in hybrid designs paired with CNNs, radiomics features, or graph neural networks [2,6,9-12,21]. Reported applications emphasize improved performance or representational capacity in tasks such as classification, segmentation, staging prediction, and embedding learning when Transformers are used for global/self-attention or multimodal fusion [2-3,6,9-13,21].",
+  "72ddcefc-de50-4af4-a0e7-298f3eb67e46": {
+    "id": "72ddcefc-de50-4af4-a0e7-298f3eb67e46",
+    "question": "What are the main challenges in using AI for medical diagnosis?",
+    "createdAt": "2026-04-14T10:58:00.028743+00:00",
+    "summary": "Across the provided literature, key challenges for AI in medical diagnosis and related clinical decision tasks include ensuring reliability under real-world deployment constraints, especially knowing when models are wrong and how to efficiently route human review [2]. Another recurring challenge is producing trustworthy quantitative probabilities (calibration) while preserving interpretability via explanations, particularly for LLM-based decision-making [3]. Additional risks around AI-generated text (e.g., misuse and detection limitations due to dataset/model diversity issues) suggest broader trust and robustness concerns relevant to clinical settings that rely on text outputs [1].",
     "agreements": [
-      "Transformers are neural network architectures that use attention mechanisms (including self-attention) as a core computational principle [1].",
-      "Transformers are repeatedly described as advantageous for modeling global dependencies/global context in data (e.g., images, spatiotemporal sequences) [2-3,4,6].",
-      "Hybrid architectures that combine convolutional feature hierarchies with Transformer-style global self-attention are presented as effective for image-based classification tasks [2,12].",
-      "Attention mechanisms (and Transformer architectures) are emphasized as important for improving detection of small structures and boundary delineation in segmentation contexts [3].",
-      "Cross-modal or multimodal attention is used to fuse heterogeneous inputs (e.g., radiomics + learned representations; image + text; multimodal clinical data) in Transformer-based systems [6,9,11].",
-      "Transformer-based self-attention can be integrated with graph neural networks to produce spatially aware embeddings while maintaining graph/spatial relationships via graph-specific encodings and attention variants [10,21]."
+      "Safe practical/clinical use requires mechanisms to assess reliability rather than relying on raw model outputs alone (e.g., uncertainty maps and calibration to guide review) [2].",
+      "A major deployment hurdle is obtaining reliable quantitative probabilities from LLMs for decision-making [3].",
+      "Data/model coverage limitations (e.g., limited model diversity and data homogeneity in benchmarks) are recognized as obstacles to robust, generalizable detection/assessment methods [1]."
     ],
     "contradictions": [
-      "One study reports its proposed hybrid architecture outperforming state-of-the-art CNN, transformer, and hybrid models on skin cancer classification, whereas other excerpts emphasize the effectiveness/advantages of Transformer or CNN-Transformer hybrids for their tasks rather than being outperformed by an alternative hybrid framework [2-4]."
+      "Traditional discriminative fine-tuning can provide probability estimates but may cause catastrophic forgetting and linguistic collapse (reducing explanation ability) [3], whereas CLSGen claims to enable robust probability estimation without sacrificing explanation-generation capabilities [3]."
     ],
     "researchGaps": [
-      "The excerpts provide limited direct, general definition beyond attention-based architecture; a consolidated, task-agnostic characterization of what distinguishes Transformers from other attention-using networks is not established within the provided material [1-13,21].",
-      "Scalability and computational efficiency challenges are explicitly noted for graph-based/transformer-based single-cell embedding frameworks, motivating further optimization of graph-specific operations and efficiency [10].",
-      "Multimodal transformer-based models are stated to face difficulties in multimodal alignment, temporal regularity, and incorporating structured medical knowledge, indicating ongoing needs for improved multimodal fusion and knowledge integration strategies [11].",
-      "Several application-focused excerpts assert performance gains using Transformer components but do not specify which Transformer design choices (e.g., token resolution, attention depth, cross-attention variants) are causally responsible, leaving ablation-level explanations underdetermined [4,6,9,12]."
+      "How to standardize and validate reliability measures (e.g., calibration and uncertainty\u2013error alignment) under realistic clinical revision constraints across tasks beyond the specific radiotherapy segmentation use case presented [2].",
+      "How to jointly optimize for calibrated probabilities and high-quality, faithful explanations in LLM-based clinical decision support without catastrophic forgetting remains an important open problem, despite proposed solutions like CLSGen [3].",
+      "How benchmark design factors such as prompt realism, domain coverage, and model diversity (highlighted for Chinese AI-text detection) translate to medical text-based diagnostic settings and affect generalization is not resolved in the excerpts [1]."
     ],
     "citations": [
       {
         "index": 1,
-        "title": "Test Paper",
+        "title": "C-ReD: A Comprehensive Chinese Benchmark for AI-Generated Text Detection Derived from Real-World Prompts",
         "authors": [
-          "Test Author"
+          "Chenxi Qing",
+          "Junxi Wu",
+          "Zheng Liu",
+          "Yixiang Qiu",
+          "Hongyao Yu",
+          "Bin Chen",
+          "Hao Wu",
+          "Shu-Tao Xia"
         ],
-        "year": 2024,
-        "source": "local",
+        "year": 2026,
+        "source": "external",
         "doi": "",
-        "url": ""
+        "url": "https://github.com/HeraldofLight/C-ReD"
       },
       {
         "index": 2,
-        "title": "Transformer augmented hybrid deep learning for explainable multi class pest classification.",
+        "title": "Budget-Aware Uncertainty for Radiotherapy Segmentation QA Using nnU-Net",
         "authors": [
-          "Verma VK",
-          "Kumar A",
-          "Pareek V",
-          "Kumar Y"
+          "Ricardo Coimbra Brioso",
+          "Lorenzo Mondo",
+          "Damiano Dei",
+          "Nicola Lambri",
+          "Pietro Mancosu",
+          "Marta Scorsetti",
+          "Daniele Loiacono"
         ],
         "year": 2026,
         "source": "external",
-        "doi": "10.1038/s41598-026-41248-1",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41935133/"
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11798v1"
       },
       {
         "index": 3,
-        "title": "A comparative study of deep learning-based zebrafish image segmentation methods.",
+        "title": "CLSGen: A Dual-Head Fine-Tuning Framework for Joint Probabilistic Classification and Verbalized Explanation",
         "authors": [
-          "Chen Y",
-          "Chen J",
-          "Jiang Y",
-          "Zheng Y",
-          "Yu C",
-          "Lin L",
-          "Jiang Z"
+          "WonJin Yoon",
+          "Kangyu Zhu",
+          "Ian Bulovic",
+          "Autumn Sehy",
+          "Yanjun Gao",
+          "Dmitriy Dligach",
+          "Majid Afshar",
+          "Timothy A. Miller"
         ],
         "year": 2026,
         "source": "external",
-        "doi": "10.1016/j.cdev.2026.204083",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41933835/"
-      },
-      {
-        "index": 4,
-        "title": "Smart medical system integrating clinical workflows for robust skin cancer detection across heterogeneous pathologies.",
-        "authors": [
-          "Abugabah A",
-          "Shukla PK",
-          "Mishra S",
-          "Dwivedi A"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1038/s41598-026-45132-w",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41942573/"
-      },
-      {
-        "index": 5,
-        "title": "EnamelNet-TRiX: A Lesion-Aware Dual-Transformer With Cross-Attention for Early and Advanced Enamel Caries Diagnosis.",
-        "authors": [
-          "Balachandran S",
-          "Marappan R"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1016/j.identj.2026.109437",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41950800/"
-      },
-      {
-        "index": 6,
-        "title": "Non-invasive endometriosis staging prediction using integrated radiomics and spatiotemporal transformer model based on dynamic contrast-enhanced MRI.",
-        "authors": [
-          "Xie H",
-          "Peng C",
-          "Hui L",
-          "Zhou Y",
-          "Zeng L"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1038/s41598-026-41499-y",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41957071/"
-      },
-      {
-        "index": 7,
-        "title": "FUGEA: Fused unified gradient ensemble for cross-architecture transferable attacks.",
-        "authors": [
-          "Huang G",
-          "Ye F",
-          "Huang T",
-          "Lu C",
-          "Chen R",
-          "Liu Q"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1016/j.neunet.2026.108926",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41967317/"
-      },
-      {
-        "index": 8,
-        "title": "Integrative effects of Telomere Length, Epigenetic Age, and Mitochondrial DNA abundance in Alzheimer's Disease",
-        "authors": [
-          "Andrews, S. J.",
-          "Sharma, R. U.",
-          "Mitchell, B. A.",
-          "Tong, T.",
-          "Bonham, L. W.",
-          "Renton, A. E.",
-          "Zhang, X.",
-          "Sirota, M.",
-          "Tosun, D.",
-          "Yaffe, K."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1101/2025.07.16.25331683",
-        "url": "https://www.medrxiv.org/content/10.1101/2025.07.16.25331683v2"
-      },
-      {
-        "index": 9,
-        "title": "Graphicalized vision-language modeling for comprehensive lung nodule analysis and risk stratification.",
-        "authors": [
-          "Zhao D",
-          "Xi J",
-          "Guo X",
-          "Chai J",
-          "Xu Z",
-          "Li L",
-          "Xue Y",
-          "Sun Q",
-          "Zheng Y",
-          "Liu S"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1038/s41746-026-02602-9",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41965884/"
-      },
-      {
-        "index": 10,
-        "title": "SCTGE infers transformer-based graph embeddings to improve cell-cell interaction identification and cell identity annotations.",
-        "authors": [
-          "Si Y",
-          "Li C",
-          "Shi M"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1016/j.compbiolchem.2026.109064",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41967428/"
-      },
-      {
-        "index": 11,
-        "title": "K-STAMM: a knowledge-enhanced spatial - temporal attention model with multimodal fusion for pneumonia prediction.",
-        "authors": [
-          "Anbukkarasi S",
-          "Hemalatha S",
-          "Balakrishnan A",
-          "Varadhaganapathy S",
-          "Easwaramoorthy SV"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1038/s41598-026-47146-w",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41957440/"
-      },
-      {
-        "index": 12,
-        "title": "CNNT-Net: a novel deep learning-based framework for estimating high-quality fiber orientation distributions from single-shell dMRI.",
-        "authors": [
-          "Fan Y",
-          "Li J",
-          "Yao Y",
-          "Ai L"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1007/s13246-026-01723-5",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41925763/"
-      },
-      {
-        "index": 13,
-        "title": "Artificial intelligence in microbiology: implications for metagenomics, diagnostics, and AMR surveillance.",
-        "authors": [
-          "Khangarot R",
-          "Kumari V",
-          "Mishra R",
-          "Singh A"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1186/s12938-026-01568-9",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41965741/"
-      },
-      {
-        "index": 14,
-        "title": "DeepTrio: Variant Calling in Families Using Deep Learning",
-        "authors": [
-          "Brambrink, L.",
-          "Kolesnikov, A.",
-          "Goel, S.",
-          "Nattestad, M.",
-          "Yun, T.",
-          "Baid, G.",
-          "Yang, H.",
-          "McLean, C.",
-          "Shafin, K.",
-          "Chang, P.-C.",
-          "Carroll, A."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1101/2021.04.05.438434",
-        "url": "https://www.biorxiv.org/content/10.1101/2021.04.05.438434v2"
-      },
-      {
-        "index": 15,
-        "title": "Multimodal artificial intelligence predicts PIK3CA mutation in breast cancer from digital pathology and clinical data: a multicenter study.",
-        "authors": [
-          "Miao J",
-          "Liu Q",
-          "Zhao J",
-          "Fan S",
-          "Wang S",
-          "Ye F",
-          "Wu S",
-          "Li J",
-          "Zhang H",
-          "Zhang M",
-          "Bu H",
-          "Han X",
-          "Teng L",
-          "Liu Y"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.20892/j.issn.2095-3941.2025.0771",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41968976/"
-      },
-      {
-        "index": 16,
-        "title": "A developmental stretch-and-fill process that optimises dendritic wiring",
-        "authors": [
-          "Rahy, R.",
-          "Baltruschat, L.",
-          "Ferreira Castro, A.",
-          "Jedlicka, P.",
-          "Tavosanis, G.",
-          "Cuntz, H."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1101/2020.07.07.191064",
-        "url": "https://www.biorxiv.org/content/10.1101/2020.07.07.191064v2"
-      },
-      {
-        "index": 17,
-        "title": "Scalable Quantum Non-Local Neural Network Optimized with Tyrannosaurus Algorithm for Brain tumor Detection using MRI Images.",
-        "authors": [
-          "Pabitha C",
-          "Agrawal G",
-          "Guganathan L",
-          "J A"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1080/00207454.2026.2656322",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41967037/"
-      },
-      {
-        "index": 18,
-        "title": "Quantum-enhanced learning: Leveraging von Neumann entropy for enhanced graph neural network performance.",
-        "authors": [
-          "Awais M",
-          "Postolache OA",
-          "Oliveira SM"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1016/j.neunet.2026.108958",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41967316/"
-      },
-      {
-        "index": 19,
-        "title": "Comparative Analysis of Health Care Use and Costs for Orthobiologic versus Surgical Treatments in Economically High-Impact Knee Conditions",
-        "authors": [
-          "Lentz, T. A.",
-          "Burrows, J.",
-          "Brucker, A.",
-          "Wong, A. I.",
-          "Qualls, L.",
-          "Divakaran, R.",
-          "Centeno, C.",
-          "Suther, T.",
-          "Thomas, L."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.64898/2026.02.27.26347270",
-        "url": "https://www.medrxiv.org/content/10.64898/2026.02.27.26347270v2"
-      },
-      {
-        "index": 20,
-        "title": "Differential migration mechanics and immune responses of glioblastoma subtypes",
-        "authors": [
-          "Shamsan, G. A.",
-          "Liu, C. J.",
-          "Braman, B. C.",
-          "Li, R.",
-          "Rathe, S. K.",
-          "Sarver, A. L.",
-          "Ghaderi, N.",
-          "McMahon, M. M.",
-          "Klank, R. L.",
-          "Tschida, B. R.",
-          "McFarren, S. J.",
-          "Rosato, P. C.",
-          "Masopust, D.",
-          "Sarkaria, J. N.",
-          "Clark, H. B.",
-          "Rosenfeld, S. S.",
-          "Largaespada, D. A.",
-          "Odde, D. J."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1101/2022.06.26.497270",
-        "url": "https://www.biorxiv.org/content/10.1101/2022.06.26.497270v3"
-      },
-      {
-        "index": 21,
-        "title": "Multi-domain based heterogeneous network for drug-target interaction prediction.",
-        "authors": [
-          "Zhou C",
-          "Liu Y",
-          "Yu L",
-          "Zhao Z",
-          "Song J",
-          "Xiang W"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1016/j.artmed.2026.103425",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41966585/"
-      },
-      {
-        "index": 22,
-        "title": "MGPP-DL: deep learning approach for material graph properties prediction.",
-        "authors": [
-          "Abbassi O",
-          "Labrim H",
-          "Ziti S",
-          "Benaissa M",
-          "Kharmoum N"
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1007/s00894-026-06692-w",
-        "url": "https://pubmed.ncbi.nlm.nih.gov/41940997/"
-      },
-      {
-        "index": 23,
-        "title": "Neural computations in the foveal and peripheral visual fields during active search",
-        "authors": [
-          "Zhang, J.",
-          "Zhu, X.",
-          "Ma, Z.",
-          "Wang, S.",
-          "Wang, Y.",
-          "Esteky, H.",
-          "Tian, Y.",
-          "Desimone, R.",
-          "Wang, S.",
-          "Zhou, H."
-        ],
-        "year": 2026,
-        "source": "external",
-        "doi": "10.1101/2021.11.22.469359",
-        "url": "https://www.biorxiv.org/content/10.1101/2021.11.22.469359v5"
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11801v1"
       }
     ],
     "externalPapersFetched": true,
-    "newPapersCount": 30
+    "newPapersCount": 3,
+    "confidenceScore": 0.0,
+    "cacheHit": false
+  },
+  "67a40076-e18e-4419-b790-64e884f0384f": {
+    "id": "67a40076-e18e-4419-b790-64e884f0384f",
+    "question": "What are the major challenges in using AI for medical diagnosis?\u201d",
+    "createdAt": "2026-04-14T10:59:16.597913+00:00",
+    "summary": "Across the provided excerpts, major challenges for AI in medical diagnosis and related clinical decision-making include (1) obtaining reliable, quantitative uncertainty/probability estimates to support safe deployment, and (2) maintaining interpretability (e.g., explanation generation) while optimizing predictive performance. In radiotherapy segmentation QA, reliable uncertainty maps and calibration are emphasized as necessary to guide targeted human review under resource constraints [3]. In LLM-based decision-making, standard fine-tuning can yield probabilities but may degrade language/explanation capabilities (catastrophic forgetting and linguistic collapse), motivating alternative training frameworks [2].",
+    "agreements": [
+      "Safe practical/clinical deployment requires reliability signals beyond point predictions, such as calibrated probabilities or uncertainty estimates that indicate where the model may be wrong [2,3].",
+      "Interpretability/usability can be undermined when models cannot provide reliable quantitative confidence information for decisions [2,3].",
+      "Calibration methods can improve the reliability of model confidence/uncertainty outputs (e.g., temperature scaling improving calibration in segmentation QA) [3]."
+    ],
+    "contradictions": [
+      "In LLM fine-tuning for decision-making, traditional discriminative fine-tuning can produce probability estimates but may cause catastrophic forgetting and linguistic collapse (hurting explanation generation) [2], whereas in radiotherapy segmentation QA, adding calibration and efficient ensembling is portrayed as promising without reporting a degradation in segmentation accuracy (accuracy remains stable across configurations) [3]."
+    ],
+    "researchGaps": [
+      "How to jointly ensure robust quantitative uncertainty/probability estimation and preserve (or improve) explanation generation/interpretability when adapting LLMs for medical decision-making [2].",
+      "How to evaluate and operationalize uncertainty--error alignment and calibration in clinically realistic workflows (e.g., under revision/budget constraints) across broader diagnostic tasks beyond the presented radiotherapy segmentation use case [3].",
+      "How to translate reliability improvements (e.g., calibration and ensembling strategies) into standardized safety and deployment criteria for clinical diagnosis settings [2,3]."
+    ],
+    "citations": [
+      {
+        "index": 1,
+        "title": "C-ReD: A Comprehensive Chinese Benchmark for AI-Generated Text Detection Derived from Real-World Prompts",
+        "authors": [
+          "Chenxi Qing",
+          "Junxi Wu",
+          "Zheng Liu",
+          "Yixiang Qiu",
+          "Hongyao Yu",
+          "Bin Chen",
+          "Hao Wu",
+          "Shu-Tao Xia"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "https://github.com/HeraldofLight/C-ReD"
+      },
+      {
+        "index": 2,
+        "title": "CLSGen: A Dual-Head Fine-Tuning Framework for Joint Probabilistic Classification and Verbalized Explanation",
+        "authors": [
+          "WonJin Yoon",
+          "Kangyu Zhu",
+          "Ian Bulovic",
+          "Autumn Sehy",
+          "Yanjun Gao",
+          "Dmitriy Dligach",
+          "Majid Afshar",
+          "Timothy A. Miller"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11801v1"
+      },
+      {
+        "index": 3,
+        "title": "Budget-Aware Uncertainty for Radiotherapy Segmentation QA Using nnU-Net",
+        "authors": [
+          "Ricardo Coimbra Brioso",
+          "Lorenzo Mondo",
+          "Damiano Dei",
+          "Nicola Lambri",
+          "Pietro Mancosu",
+          "Marta Scorsetti",
+          "Daniele Loiacono"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11798v1"
+      }
+    ],
+    "externalPapersFetched": false,
+    "newPapersCount": 0,
+    "confidenceScore": 0.5257594180107117,
+    "cacheHit": false,
+    "external_papers": [],
+    "local_sufficient": true
+  },
+  "bc93d72c-8d01-458e-aa7c-05327a6bacfe": {
+    "id": "bc93d72c-8d01-458e-aa7c-05327a6bacfe",
+    "question": "What are the main challenges in using AI for medical diagnosis?",
+    "createdAt": "2026-04-14T10:59:37.660852+00:00",
+    "summary": "Across the provided excerpts, major challenges for AI in medical diagnosis and related clinical decision-making include (1) obtaining reliable, quantitative uncertainty/probability estimates to support safe deployment, and (2) maintaining interpretability (e.g., explanation generation) while optimizing predictive performance. In radiotherapy segmentation QA, reliable uncertainty maps and calibration are emphasized as necessary to guide targeted human review under resource constraints [3]. In LLM-based decision-making, standard fine-tuning can yield probabilities but may degrade language/explanation capabilities (catastrophic forgetting and linguistic collapse), motivating alternative training frameworks [2].",
+    "agreements": [
+      "Safe practical/clinical deployment requires reliability signals beyond point predictions, such as calibrated probabilities or uncertainty estimates that indicate where the model may be wrong [2,3].",
+      "Interpretability/usability can be undermined when models cannot provide reliable quantitative confidence information for decisions [2,3].",
+      "Calibration methods can improve the reliability of model confidence/uncertainty outputs (e.g., temperature scaling improving calibration in segmentation QA) [3]."
+    ],
+    "contradictions": [
+      "In LLM fine-tuning for decision-making, traditional discriminative fine-tuning can produce probability estimates but may cause catastrophic forgetting and linguistic collapse (hurting explanation generation) [2], whereas in radiotherapy segmentation QA, adding calibration and efficient ensembling is portrayed as promising without reporting a degradation in segmentation accuracy (accuracy remains stable across configurations) [3]."
+    ],
+    "researchGaps": [
+      "How to jointly ensure robust quantitative uncertainty/probability estimation and preserve (or improve) explanation generation/interpretability when adapting LLMs for medical decision-making [2].",
+      "How to evaluate and operationalize uncertainty--error alignment and calibration in clinically realistic workflows (e.g., under revision/budget constraints) across broader diagnostic tasks beyond the presented radiotherapy segmentation use case [3].",
+      "How to translate reliability improvements (e.g., calibration and ensembling strategies) into standardized safety and deployment criteria for clinical diagnosis settings [2,3]."
+    ],
+    "citations": [
+      {
+        "index": 1,
+        "title": "C-ReD: A Comprehensive Chinese Benchmark for AI-Generated Text Detection Derived from Real-World Prompts",
+        "authors": [
+          "Chenxi Qing",
+          "Junxi Wu",
+          "Zheng Liu",
+          "Yixiang Qiu",
+          "Hongyao Yu",
+          "Bin Chen",
+          "Hao Wu",
+          "Shu-Tao Xia"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "https://github.com/HeraldofLight/C-ReD"
+      },
+      {
+        "index": 2,
+        "title": "CLSGen: A Dual-Head Fine-Tuning Framework for Joint Probabilistic Classification and Verbalized Explanation",
+        "authors": [
+          "WonJin Yoon",
+          "Kangyu Zhu",
+          "Ian Bulovic",
+          "Autumn Sehy",
+          "Yanjun Gao",
+          "Dmitriy Dligach",
+          "Majid Afshar",
+          "Timothy A. Miller"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11801v1"
+      },
+      {
+        "index": 3,
+        "title": "Budget-Aware Uncertainty for Radiotherapy Segmentation QA Using nnU-Net",
+        "authors": [
+          "Ricardo Coimbra Brioso",
+          "Lorenzo Mondo",
+          "Damiano Dei",
+          "Nicola Lambri",
+          "Pietro Mancosu",
+          "Marta Scorsetti",
+          "Daniele Loiacono"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11798v1"
+      }
+    ],
+    "externalPapersFetched": false,
+    "newPapersCount": 0,
+    "confidenceScore": 0.0,
+    "cacheHit": true
+  },
+  "f181abb2-6dde-4544-adfd-ddcff69f6645": {
+    "id": "f181abb2-6dde-4544-adfd-ddcff69f6645",
+    "question": "What are the main obstacle in using AI for medical diagnosis?",
+    "createdAt": "2026-04-14T11:00:13.862333+00:00",
+    "summary": "Across the provided excerpts, key obstacles to using AI for medical diagnosis center on reliability, especially trustworthy probability/uncertainty estimates and calibration, and on maintaining interpretability via usable explanations. LLM-based decision support faces difficulties producing reliable quantitative probabilities, and standard fine-tuning approaches can damage language/explanation ability through catastrophic forgetting and linguistic collapse [1]. In clinical imaging workflows (radiotherapy segmentation), safe deployment requires uncertainty cues that align with errors under realistic human revision constraints, motivating calibrated uncertainty quantification and quality assurance frameworks [3].",
+    "agreements": [
+      "Safe practical/clinical deployment requires reliability signals indicating where models may be wrong (e.g., uncertainty cues for targeted review) [3].",
+      "Reliable quantitative confidence information is a critical hurdle for deploying LLMs in practical decision-making settings [1].",
+      "Interpretability/usability can be undermined if a model loses its ability to generate explanations during fine-tuning [1]."
+    ],
+    "contradictions": [
+      "Standard discriminative fine-tuning of LLMs can yield probability estimates but risks catastrophic forgetting and linguistic collapse (hurting explanation generation) [1], whereas calibrated inference strategies (e.g., temperature scaling with checkpoint-based inference) can improve calibration without degrading segmentation accuracy in a radiotherapy segmentation QA setting [3]."
+    ],
+    "researchGaps": [
+      "How to obtain reliable, quantitative probabilities from LLM-based medical decision systems without inducing catastrophic forgetting or loss of explanation quality remains an open challenge [1].",
+      "How best to operationalize uncertainty maps in real clinical workflows under realistic revision constraints\u2014beyond a specific TMLI radiotherapy segmentation use case\u2014remains underexplored in the excerpts [3].",
+      "The excerpts do not address how to evaluate or ensure generalization and robustness of medical diagnostic AI across diverse data domains and model variants, despite showing this as a concern in non-medical text-detection benchmarks [2]."
+    ],
+    "citations": [
+      {
+        "index": 1,
+        "title": "CLSGen: A Dual-Head Fine-Tuning Framework for Joint Probabilistic Classification and Verbalized Explanation",
+        "authors": [
+          "WonJin Yoon",
+          "Kangyu Zhu",
+          "Ian Bulovic",
+          "Autumn Sehy",
+          "Yanjun Gao",
+          "Dmitriy Dligach",
+          "Majid Afshar",
+          "Timothy A. Miller"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11801v1"
+      },
+      {
+        "index": 2,
+        "title": "C-ReD: A Comprehensive Chinese Benchmark for AI-Generated Text Detection Derived from Real-World Prompts",
+        "authors": [
+          "Chenxi Qing",
+          "Junxi Wu",
+          "Zheng Liu",
+          "Yixiang Qiu",
+          "Hongyao Yu",
+          "Bin Chen",
+          "Hao Wu",
+          "Shu-Tao Xia"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "https://github.com/HeraldofLight/C-ReD"
+      },
+      {
+        "index": 3,
+        "title": "Budget-Aware Uncertainty for Radiotherapy Segmentation QA Using nnU-Net",
+        "authors": [
+          "Ricardo Coimbra Brioso",
+          "Lorenzo Mondo",
+          "Damiano Dei",
+          "Nicola Lambri",
+          "Pietro Mancosu",
+          "Marta Scorsetti",
+          "Daniele Loiacono"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11798v1"
+      }
+    ],
+    "externalPapersFetched": false,
+    "newPapersCount": 0,
+    "confidenceScore": 0.5055659890174866,
+    "cacheHit": false,
+    "external_papers": [],
+    "local_sufficient": true
+  },
+  "794afdf8-403c-46fb-9e7d-f20bf1d8b58c": {
+    "id": "794afdf8-403c-46fb-9e7d-f20bf1d8b58c",
+    "question": "how important is the need of Neural network and blockchain?\n",
+    "createdAt": "2026-04-14T11:06:07.882695+00:00",
+    "summary": "Across the provided excerpts, neural networks are repeatedly positioned as important for improving reliability, controllability, and practical deployment of AI systems in diverse high-stakes or complex domains (e.g., solar forecasting, clinical segmentation QA, and LLM-based classification/explanations) [1][5][6]. The papers emphasize that na\u00efve deep learning can exhibit failures (e.g., physically implausible outputs, miscalibration, weak behavioral control), motivating architectures, calibration, and intervention methods that better align model behavior with domain constraints or desired outputs [1][2][5][6]. None of the provided excerpts discuss blockchain, its applications, or its necessity, so the importance/need for blockchain cannot be assessed from this evidence base.",
+    "agreements": [
+      "Unmodified or standard deep learning/LLM approaches can be unreliable for real-world deployment, motivating methods that improve reliability or alignment (e.g., physics/constraints, calibration, or specialized fine-tuning) [1][5][6].",
+      "Reliability-oriented techniques beyond raw accuracy are important for deployment, such as enforcing physical consistency in forecasting or improving calibration/uncertainty for clinical QA [1][6].",
+      "Interpretability or controllability at the level needed for decision-making remains challenging, and methods are being proposed to better connect internal signals (representations/probabilities/uncertainty) to useful outputs (behavior/explanations/QA cues) [2][5][6]."
+    ],
+    "contradictions": [
+      "Neural intervention results suggest strong causal steering of internal representations/probe readouts (targeted success rates exceeding 0.8 for some concepts), yet comparatively weaker and concept-dependent steering of label-generation behavior with spillover, indicating a gap between representational control and behavioral control [2]."
+    ],
+    "researchGaps": [
+      "No evidence is provided on blockchain: the excerpts contain no discussion of blockchain mechanisms, use cases, benefits, or tradeoffs, so the research question\u2019s blockchain component is unaddressed in this set of papers.",
+      "How to close the gap between representational control and behavioral control in LLMs remains unresolved, as neuron-level interventions can strongly shift probes but only weakly and inconsistently control generated labels [2].",
+      "Methods that ensure both reliable quantitative probabilities and preservation of explanation generation in LLMs are an identified challenge area, motivating further validation and extension beyond binary classification settings described here [5].",
+      "For clinical segmentation QA, further work is implied on optimizing the tradeoff among budget/efficiency, calibration, and uncertainty-error alignment for safe deployment across settings beyond the representative TMLI use case [6].",
+      "For forecasting in off-grid photovoltaics, broader evidence is needed on generalization across climates/system contexts beyond the reported severe semi-arid validation horizon and on comparative performance versus other physically constrained approaches (not described in the excerpts) [1]."
+    ],
+    "citations": [
+      {
+        "index": 1,
+        "title": "Physics-Informed State Space Models for Reliable Solar Irradiance Forecasting in Off-Grid Systems",
+        "authors": [
+          "Mohammed Ezzaldin Babiker Abdullah"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11807v1"
+      },
+      {
+        "index": 2,
+        "title": "Psychological Concept Neurons: Can Neural Control Bias Probing and Shift Generation in LLMs?",
+        "authors": [
+          "Yuto Harada",
+          "Hiro Taiyo Hamada"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11802v1"
+      },
+      {
+        "index": 3,
+        "title": "Pair2Scene: Learning Local Object Relations for Procedural Scene Generation",
+        "authors": [
+          "Xingjian Ran",
+          "Shujie Zhang",
+          "Weipeng Zhong",
+          "Li Luo",
+          "Bo Dai"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11808v1"
+      },
+      {
+        "index": 4,
+        "title": "C-ReD: A Comprehensive Chinese Benchmark for AI-Generated Text Detection Derived from Real-World Prompts",
+        "authors": [
+          "Chenxi Qing",
+          "Junxi Wu",
+          "Zheng Liu",
+          "Yixiang Qiu",
+          "Hongyao Yu",
+          "Bin Chen",
+          "Hao Wu",
+          "Shu-Tao Xia"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "https://github.com/HeraldofLight/C-ReD"
+      },
+      {
+        "index": 5,
+        "title": "CLSGen: A Dual-Head Fine-Tuning Framework for Joint Probabilistic Classification and Verbalized Explanation",
+        "authors": [
+          "WonJin Yoon",
+          "Kangyu Zhu",
+          "Ian Bulovic",
+          "Autumn Sehy",
+          "Yanjun Gao",
+          "Dmitriy Dligach",
+          "Majid Afshar",
+          "Timothy A. Miller"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11801v1"
+      },
+      {
+        "index": 6,
+        "title": "Budget-Aware Uncertainty for Radiotherapy Segmentation QA Using nnU-Net",
+        "authors": [
+          "Ricardo Coimbra Brioso",
+          "Lorenzo Mondo",
+          "Damiano Dei",
+          "Nicola Lambri",
+          "Pietro Mancosu",
+          "Marta Scorsetti",
+          "Daniele Loiacono"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11798v1"
+      },
+      {
+        "index": 7,
+        "title": "Many-Body Super- and Subradiance in Ordered Atomic Arrays",
+        "authors": [
+          "Alec Douglas",
+          "Lin Su",
+          "Michal Szurek",
+          "Robin Groth",
+          "Sandra Brandstetter",
+          "Ognjen Markovic",
+          "Oriol Rubies-Bigorda",
+          "Stefan Ostermann",
+          "Susanne F. Yelin",
+          "Markus Greiner"
+        ],
+        "year": 2026,
+        "source": "external",
+        "doi": "",
+        "url": "http://arxiv.org/abs/2604.11795v1"
+      }
+    ],
+    "externalPapersFetched": true,
+    "newPapersCount": 4,
+    "confidenceScore": 0.41894846200943,
+    "cacheHit": false
   }
 }

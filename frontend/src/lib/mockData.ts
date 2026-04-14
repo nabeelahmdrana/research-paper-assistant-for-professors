@@ -85,6 +85,8 @@ export const MOCK_QUERIES: QueryResult[] = [
         url: "https://arxiv.org/abs/2005.14165",
       },
     ],
+    externalPapersFetched: true,
+    newPapersCount: 1,
   },
   {
     id: "q2",
@@ -119,6 +121,8 @@ export const MOCK_QUERIES: QueryResult[] = [
         source: "local",
       },
     ],
+    externalPapersFetched: false,
+    newPapersCount: 0,
   },
   {
     id: "q3",
@@ -144,6 +148,8 @@ export const MOCK_QUERIES: QueryResult[] = [
         url: "https://arxiv.org/abs/2005.11401",
       },
     ],
+    externalPapersFetched: true,
+    newPapersCount: 1,
   },
 ];
 

@@ -33,16 +33,28 @@ export interface QueryResult {
   newPapersCount: number;
 }
 
-export interface ExternalPaper {
+export type ExternalPaper = {
   paper_id: string;
   title: string;
-  authors: string[];
-  year: number | string;
   abstract: string;
+  authors: string[];
+  year: string;
   doi: string;
   url: string;
-  source: "external";
-}
+  relevance_score?: number;
+};
+
+export type CacheStats = {
+  cache_hit_rate: number;
+  avg_confidence: number;
+  external_usage_ratio: number;
+  total_queries: number;
+  cached_answers: number;
+};
+
+export type QueryResponse =
+  | { status: "complete"; data: QueryResult }
+  | { status: "needs_external_selection"; result_id: string; external_papers: ExternalPaper[] };
 
 export interface DbStats {
   paperCount: number;

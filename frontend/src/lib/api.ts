@@ -1,7 +1,7 @@
 // API client for FastAPI backend
 // All functions call the real FastAPI endpoints.
 
-import type { Paper, QueryResult, DbStats, ApiResponse, ExternalPaper } from "./types";
+import type { Paper, QueryResult, DbStats, ApiResponse, ExternalPaper, CacheStats, QueryResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -100,6 +100,66 @@ export async function runResearchQuery(
   return { data: mapQueryResult(res.data), error: null, status: res.status };
 }
 
+export async function runQuery(
+  question: string,
+  mode: "auto" | "local" | "external" = "auto"
+): Promise<QueryResponse> {
+  const res = await apiFetch<Record<string, unknown>>("/api/research", {
+    method: "POST",
+    body: JSON.stringify({ question, mode }),
+  });
+
+  if (res.error || !res.data) {
+    throw new Error(res.error ?? "Research query failed");
+  }
+
+  const data = res.data;
+  if (data["status"] === "needs_external_selection") {
+    return {
+      status: "needs_external_selection",
+      result_id: String(data["result_id"] ?? ""),
+      external_papers: (data["external_papers"] as ExternalPaper[]) ?? [],
+    };
+  }
+
+  return { status: "complete", data: mapQueryResult(data) };
+}
+
+export async function confirmExternalPapers(
+  result_id: string,
+  selected_paper_ids: string[]
+): Promise<QueryResult> {
+  const res = await apiFetch<Record<string, unknown>>("/api/research/confirm", {
+    method: "POST",
+    body: JSON.stringify({ result_id, selected_paper_ids }),
+  });
+  if (res.error || !res.data) {
+    throw new Error(res.error ?? "Confirmation failed");
+  }
+  return mapQueryResult(res.data);
+}
+
+export async function getCacheStats(): Promise<CacheStats> {
+  const res = await apiFetch<CacheStats>("/api/cache/stats");
+  if (res.error || !res.data) {
+    throw new Error(res.error ?? "Failed to fetch cache stats");
+  }
+  return res.data;
+}
+
+export async function saveExternalPaper(
+  paper: ExternalPaper
+): Promise<{ chunks_stored: number }> {
+  const res = await apiFetch<{ chunks_stored: number }>("/api/papers/save-external", {
+    method: "POST",
+    body: JSON.stringify(paper),
+  });
+  if (res.error || !res.data) {
+    throw new Error(res.error ?? "Failed to save external paper");
+  }
+  return res.data;
+}
+
 export async function getQueryResult(
   id: string
 ): Promise<ApiResponse<QueryResult>> {
@@ -187,13 +247,18 @@ export async function fetchPapersByDoi(
   };
 }
 
-export async function listPapers(): Promise<
-  ApiResponse<{ papers: Paper[]; total: number }>
-> {
+export async function listPapers(
+  page = 1,
+  pageSize = 1000,
+): Promise<ApiResponse<{ papers: Paper[]; total: number }>> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
   const res = await apiFetch<{
     papers: Record<string, unknown>[];
     total: number;
-  }>("/api/papers");
+  }>(`/api/papers?${params}`);
   if (res.error || !res.data) {
     return { data: { papers: [], total: 0 }, error: res.error, status: res.status };
   }

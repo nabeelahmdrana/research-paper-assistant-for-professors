@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import papers, research
@@ -35,6 +35,63 @@ app.add_middleware(
 
 app.include_router(papers.router, prefix="/api")
 app.include_router(research.router, prefix="/api")
+
+# ---------------------------------------------------------------------------
+# Cache stats router — mounted at /api (not /api/papers) so the route is
+# reachable at GET /api/cache/stats as required.
+# ---------------------------------------------------------------------------
+
+_cache_router = APIRouter()
+
+
+@_cache_router.get("/cache/stats")
+async def get_cache_stats() -> dict:
+    """Return query cache statistics.
+
+    Combines in-memory query counters (from the research module) with the
+    ChromaDB answers collection count so the caller gets a unified view.
+
+    Returns:
+        cache_hit_rate        — fraction of queries served from cache
+        avg_confidence        — mean confidence score across all queries
+        external_usage_ratio  — fraction of queries that triggered external search
+        total_queries         — total queries processed since server start
+        cached_answers        — number of answers stored in the ChromaDB cache
+    """
+    from app.api.research import get_query_stats  # avoid circular import at module level
+
+    query_stats = get_query_stats()
+    total = query_stats["total_queries"]
+
+    cache_hit_rate = (
+        query_stats["cache_hits"] / total if total > 0 else 0.0
+    )
+    external_usage_ratio = (
+        query_stats["external_queries"] / total if total > 0 else 0.0
+    )
+
+    # Count stored answers in ChromaDB answers collection
+    cached_answers = 0
+    try:
+        answers_col = vector_store.get_answers_collection()
+        cached_answers = answers_col.count()
+    except Exception:
+        pass
+
+    return {
+        "data": {
+            "cache_hit_rate": round(cache_hit_rate, 4),
+            "avg_confidence": query_stats["avg_confidence"],
+            "external_usage_ratio": round(external_usage_ratio, 4),
+            "total_queries": total,
+            "cached_answers": cached_answers,
+        },
+        "error": None,
+        "status": 200,
+    }
+
+
+app.include_router(_cache_router, prefix="/api")
 
 
 @app.get("/api/health")

@@ -1,8 +1,8 @@
-"""Agent pipeline tests — Phase 5.
+"""Agent pipeline tests — Phase 5 / Phase B.
 
 Tests each agent in isolation and the full supervisor pipeline.
-External API calls (Semantic Scholar, arXiv, OpenAI) are patched so
-the tests run offline and without API keys.
+External API calls (MCP, OpenAI) are patched so the tests run offline
+and without API keys.
 """
 
 from typing import Any
@@ -15,7 +15,13 @@ import pytest
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
-def _make_chunk(paper_id: str, title: str = "Test Paper", text: str = "Sample text.", source: str = "local") -> dict:
+def _make_chunk(
+    paper_id: str,
+    title: str = "Test Paper",
+    text: str = "Sample text.",
+    source: str = "local",
+    distance: float = 0.1,
+) -> dict:
     return {
         "id": f"{paper_id}_chunk_0",
         "text": text,
@@ -29,7 +35,7 @@ def _make_chunk(paper_id: str, title: str = "Test Paper", text: str = "Sample te
             "url": "",
             "chunk_index": 0,
         },
-        "distance": 0.1,
+        "distance": distance,
     }
 
 
@@ -44,8 +50,229 @@ def _make_openai_response(json_text: str) -> MagicMock:
     return mock_response
 
 
+# Helper: full initial state with all Phase B fields
+def _base_state(**overrides: Any) -> dict:
+    state: dict[str, Any] = {
+        "question": "transformers",
+        "error": None,
+        "normalized_query": "",
+        "query_embedding": [],
+        "cache_hit": False,
+        "cached_answer": {},
+        "retrieved_chunks": [],
+        "reranked_chunks": [],
+        "confidence_score": 0.0,
+        "answer_stored": False,
+        "local_results": [],
+        "local_sufficient": False,
+        "external_papers": [],
+        "chunks_stored": False,
+        "analysis": {},
+        "sources_origin": [],
+    }
+    state.update(overrides)
+    return state
+
+
 # ---------------------------------------------------------------------------
-# local_search_agent
+# query_processor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_query_processor_normalises_query() -> None:
+    """query_processor strips and lowercases the query and generates an embedding."""
+    from app.agents.query_processor import query_processor
+
+    mock_model = MagicMock()
+    mock_model.encode.return_value = MagicMock()
+    mock_model.encode.return_value.tolist.return_value = [0.1, 0.2, 0.3]
+
+    with patch("app.agents.query_processor._get_model", return_value=mock_model):
+        state = await query_processor(_base_state(question="  Transformers NLP  "))
+
+    assert state["normalized_query"] == "transformers nlp"
+    assert state["query_embedding"] == [0.1, 0.2, 0.3]
+
+
+# ---------------------------------------------------------------------------
+# cache_checker
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cache_checker_hit() -> None:
+    """cache_checker returns cache_hit=True when lookup returns a result."""
+    from app.agents.cache_checker import cache_checker
+
+    cached_answer = {"summary": "Cached.", "agreements": [], "contradictions": [], "researchGaps": [], "citations": []}
+
+    with patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=cached_answer):
+        state = await cache_checker(_base_state(query_embedding=[0.1, 0.2, 0.3]))
+
+    assert state["cache_hit"] is True
+    assert state["cached_answer"] == cached_answer
+
+
+@pytest.mark.asyncio
+async def test_cache_checker_miss() -> None:
+    """cache_checker returns cache_hit=False when lookup returns None."""
+    from app.agents.cache_checker import cache_checker
+
+    with patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None):
+        state = await cache_checker(_base_state(query_embedding=[0.1, 0.2, 0.3]))
+
+    assert state["cache_hit"] is False
+    assert state["cached_answer"] == {}
+
+
+@pytest.mark.asyncio
+async def test_cache_checker_empty_embedding() -> None:
+    """cache_checker skips lookup when query_embedding is empty."""
+    from app.agents.cache_checker import cache_checker
+
+    with patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock) as mock_lookup:
+        state = await cache_checker(_base_state(query_embedding=[]))
+
+    mock_lookup.assert_not_called()
+    assert state["cache_hit"] is False
+
+
+# ---------------------------------------------------------------------------
+# retriever
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_retriever_merges_results() -> None:
+    """retriever combines vector and BM25 results and applies RRF."""
+    from app.agents.retriever import retriever
+
+    vector_chunks = [_make_chunk(f"vec_{i}") for i in range(5)]
+    bm25_chunks = [_make_chunk(f"bm25_{i}") for i in range(5)]
+
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = True
+    mock_bm25.search.return_value = bm25_chunks
+
+    with patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=vector_chunks), \
+         patch("app.agents.retriever.bm25_index", mock_bm25):
+        state = await retriever(_base_state(question="transformers"))
+
+    # All 10 unique chunks should appear (5 vec + 5 bm25, no overlap)
+    assert len(state["retrieved_chunks"]) == 10
+    # Every chunk should have an rrf_score
+    for chunk in state["retrieved_chunks"]:
+        assert "rrf_score" in chunk
+
+
+@pytest.mark.asyncio
+async def test_retriever_rebuilds_bm25_if_not_ready() -> None:
+    """retriever calls build_index() when the BM25 index is not ready."""
+    from app.agents.retriever import retriever
+
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = False
+    mock_bm25.build_index = AsyncMock()
+    mock_bm25.search.return_value = []
+
+    with patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.retriever.bm25_index", mock_bm25):
+        await retriever(_base_state(question="q"))
+
+    mock_bm25.build_index.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# reranker_agent
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reranker_agent_reranks_chunks() -> None:
+    """reranker_agent returns reranked_chunks with rerank_score added."""
+    from app.agents.reranker_agent import reranker_agent
+
+    chunks = [_make_chunk(f"p{i}") for i in range(5)]
+    reranked = [dict(c, rerank_score=float(5 - i)) for i, c in enumerate(chunks)]
+
+    with patch("app.agents.reranker_agent.reranker.rerank", return_value=reranked):
+        state = await reranker_agent(_base_state(question="q", retrieved_chunks=chunks))
+
+    assert state["reranked_chunks"] == reranked
+
+
+@pytest.mark.asyncio
+async def test_reranker_agent_empty_input() -> None:
+    """reranker_agent returns empty list when retrieved_chunks is empty."""
+    from app.agents.reranker_agent import reranker_agent
+
+    state = await reranker_agent(_base_state(question="q", retrieved_chunks=[]))
+    assert state["reranked_chunks"] == []
+
+
+# ---------------------------------------------------------------------------
+# confidence_evaluator
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_confidence_evaluator_sufficient() -> None:
+    """High-similarity chunks from 3+ papers should yield local_sufficient=True."""
+    from app.agents.confidence_evaluator import confidence_evaluator
+
+    chunks = [_make_chunk(f"paper_{i}", distance=0.05) for i in range(4)]
+    state = await confidence_evaluator(_base_state(reranked_chunks=chunks))
+
+    assert state["confidence_score"] > 0.7
+    assert state["local_sufficient"] is True
+
+
+@pytest.mark.asyncio
+async def test_confidence_evaluator_insufficient() -> None:
+    """No chunks should yield confidence=0 and local_sufficient=False."""
+    from app.agents.confidence_evaluator import confidence_evaluator
+
+    state = await confidence_evaluator(_base_state(reranked_chunks=[]))
+    assert state["confidence_score"] == 0.0
+    assert state["local_sufficient"] is False
+
+
+# ---------------------------------------------------------------------------
+# storage_agent
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_storage_agent_stores_answer() -> None:
+    """storage_agent calls answer_cache.store and sets answer_stored=True."""
+    from app.agents.storage_agent import storage_agent
+
+    analysis = {"summary": "Test.", "agreements": [], "contradictions": [], "researchGaps": [], "citations": []}
+
+    with patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock) as mock_store:
+        state = await storage_agent(_base_state(
+            question="test query",
+            query_embedding=[0.1, 0.2],
+            analysis=analysis,
+        ))
+
+    mock_store.assert_awaited_once()
+    assert state["answer_stored"] is True
+
+
+@pytest.mark.asyncio
+async def test_storage_agent_skips_on_empty_embedding() -> None:
+    """storage_agent sets answer_stored=False and skips store when embedding is empty."""
+    from app.agents.storage_agent import storage_agent
+
+    with patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock) as mock_store:
+        state = await storage_agent(_base_state(
+            question="q",
+            query_embedding=[],
+            analysis={"summary": "x"},
+        ))
+
+    mock_store.assert_not_called()
+    assert state["answer_stored"] is False
+
+
+# ---------------------------------------------------------------------------
+# local_search_agent (retained for backward compatibility)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -58,7 +285,7 @@ async def test_local_search_agent_sufficient() -> None:
 
     with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = chunks
-        state = await local_search_agent({"question": "transformers", "local_results": [], "local_sufficient": False, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None})
+        state = await local_search_agent(_base_state())
 
     assert state["local_sufficient"] is True
     assert len(state["local_results"]) == settings.min_relevant_chunks + 2
@@ -71,7 +298,7 @@ async def test_local_search_agent_insufficient() -> None:
 
     with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = []
-        state = await local_search_agent({"question": "transformers", "local_results": [], "local_sufficient": False, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None})
+        state = await local_search_agent(_base_state())
 
     assert state["local_sufficient"] is False
     assert state["local_results"] == []
@@ -82,12 +309,11 @@ async def test_local_search_agent_filters_by_distance() -> None:
     """Chunks with distance > threshold are excluded from local_results."""
     from app.agents.local_search_agent import local_search_agent
 
-    irrelevant_chunk = _make_chunk("far_paper")
-    irrelevant_chunk["distance"] = 0.99  # far away, above threshold
+    irrelevant_chunk = _make_chunk("far_paper", distance=0.99)
 
     with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = [irrelevant_chunk]
-        state = await local_search_agent({"question": "q", "local_results": [], "local_sufficient": False, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None})
+        state = await local_search_agent(_base_state(question="q"))
 
     assert state["local_sufficient"] is False
     assert len(state["local_results"]) == 0
@@ -99,34 +325,58 @@ async def test_local_search_agent_filters_by_distance() -> None:
 
 @pytest.mark.asyncio
 async def test_external_search_agent_combines_results() -> None:
-    """Results from Semantic Scholar and arXiv (via MCP) are combined and deduped."""
+    """Results from arXiv and PubMed (via MCP) are combined and deduplicated."""
     from app.agents.external_search_agent import external_search_agent
 
-    ss_papers = [{"paperId": "ss1", "title": "Attention Is All You Need", "authors": ["Vaswani"], "year": 2017, "abstract": "Transformer paper", "doi": "", "url": ""}]
+    # external_search_agent calls: search_arxiv, search_pubmed, search_biorxiv, search_medrxiv
     arxiv_papers = [
-        {"arxiv_id": "1706.03762", "title": "BERT Paper", "authors": ["Devlin"], "year": 2018, "abstract": "BERT abstract", "doi": "", "url": "https://arxiv.org/abs/1810.04805"},
-        # Duplicate title from Semantic Scholar — should be deduped
-        {"arxiv_id": "1706.03762", "title": "Attention Is All You Need", "authors": ["Vaswani"], "year": 2017, "abstract": "Dup", "doi": "", "url": ""},
+        {
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani"],
+            "published_date": "2017-06-12",
+            "abstract": "Transformer paper",
+            "doi": "",
+            "url": "",
+            "paper_id": "arxiv:1706.03762",
+        }
+    ]
+    pubmed_papers = [
+        {
+            "title": "BERT Paper",
+            "authors": ["Devlin"],
+            "published_date": "2018-10-11",
+            "abstract": "BERT abstract",
+            "doi": "",
+            "url": "https://arxiv.org/abs/1810.04805",
+            "paper_id": "pubmed:bert",
+        },
+        # Duplicate title — should be deduped
+        {
+            "title": "Attention Is All You Need",
+            "authors": ["Vaswani"],
+            "published_date": "2017-06-12",
+            "abstract": "Dup",
+            "doi": "",
+            "url": "",
+            "paper_id": "pubmed:dup",
+        },
     ]
 
-    state: dict[str, Any] = {"question": "transformers", "local_results": [], "local_sufficient": False, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None}
-
     async def mock_mcp_tool(tool_name: str, args: dict) -> list[dict]:
-        if tool_name == "search_papers":
-            return ss_papers
-        if tool_name == "search_arxiv_papers":
+        if tool_name == "search_arxiv":
             return arxiv_papers
+        if tool_name == "search_pubmed":
+            return pubmed_papers
         return []
 
     with patch("app.agents.external_search_agent._call_mcp_tool", side_effect=mock_mcp_tool):
-        state = await external_search_agent(state)
+        state = await external_search_agent(_base_state())
 
-    # 1 from SS + 1 unique from arXiv (dup removed) = 2
+    # 1 from arXiv + 1 unique from PubMed (dup removed) = 2
     assert len(state["external_papers"]) == 2
     titles = {p["title"] for p in state["external_papers"]}
     assert "BERT Paper" in titles
     assert "Attention Is All You Need" in titles
-    # sources_origin should be populated
     assert len(state["sources_origin"]) == 2
 
 
@@ -141,15 +391,14 @@ async def test_process_agent_ingests_external_papers() -> None:
 
     external_papers = [
         {"paper_id": "ext1", "title": "Paper A", "authors": ["X"], "year": 2021, "abstract": "Some abstract", "doi": "", "url": "", "source": "external"},
-        {"paper_id": "ext2", "title": "Paper B", "authors": ["Y"], "year": 2022, "abstract": "", "doi": "", "url": "", "source": "external"},  # empty abstract — should be skipped
+        {"paper_id": "ext2", "title": "Paper B", "authors": ["Y"], "year": 2022, "abstract": "", "doi": "", "url": "", "source": "external"},
     ]
-    state: dict[str, Any] = {"question": "q", "local_results": [], "local_sufficient": False, "external_papers": external_papers, "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None}
+    state = _base_state(external_papers=external_papers)
 
     with patch("app.agents.process_agent.ingest_paper", new_callable=AsyncMock) as mock_ingest:
         mock_ingest.return_value = 3
         state = await process_agent(state)
 
-    # Only Paper A has abstract — should be called once
     assert mock_ingest.call_count == 1
     assert state["chunks_stored"] is True
 
@@ -159,21 +408,29 @@ async def test_process_agent_ingests_external_papers() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_analysis_agent_calls_claude_and_parses_json() -> None:
-    """analysis_agent calls OpenAI and parses the structured JSON response."""
+async def test_analysis_agent_uses_reranked_chunks() -> None:
+    """analysis_agent uses reranked_chunks when available and calls the LLM."""
     from app.agents.analysis_agent import analysis_agent
 
     chunks = [_make_chunk("p1", title="Attention Is All You Need", text="Transformers are great.")]
 
-    claude_response_json = '{"summary":"Transformers dominate NLP.","agreements":["Self-attention scales [1]"],"contradictions":[],"researchGaps":["Efficiency at scale"],"citations":[{"index":1,"title":"Attention Is All You Need","authors":["Vaswani"],"year":2017,"source":"local","doi":"10.1234/test","url":""}]}'
+    llm_response_json = (
+        '{"summary":"Transformers dominate NLP.",'
+        '"agreements":["Self-attention scales [1]"],'
+        '"contradictions":[],'
+        '"researchGaps":["Efficiency at scale"],'
+        '"citations":[{"index":1,"title":"Attention Is All You Need",'
+        '"authors":["Vaswani"],"year":2017,"source":"local","doi":"10.1234/test","url":""}]}'
+    )
 
-    mock_response = _make_openai_response(claude_response_json)
+    mock_response = _make_openai_response(llm_response_json)
 
-    state: dict[str, Any] = {"question": "What are transformers?", "local_results": chunks, "local_sufficient": True, "external_papers": [], "chunks_stored": False, "analysis": {}, "sources_origin": [], "error": None}
+    state = _base_state(
+        question="What are transformers?",
+        reranked_chunks=chunks,
+    )
 
-    with patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock) as mock_query, \
-         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_openai_cls:
-        mock_query.return_value = chunks
+    with patch("app.agents.analysis_agent.AsyncOpenAI") as mock_openai_cls:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_openai_cls.return_value = mock_client
@@ -187,11 +444,43 @@ async def test_analysis_agent_calls_claude_and_parses_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_analysis_agent_handles_empty_db() -> None:
-    """When ChromaDB is empty, analysis returns a graceful empty response."""
+async def test_analysis_agent_falls_back_to_retrieved_chunks() -> None:
+    """When reranked_chunks is empty, analysis_agent falls back to retrieved_chunks."""
     from app.agents.analysis_agent import analysis_agent
 
-    state: dict[str, Any] = {"question": "q", "local_results": [], "local_sufficient": False, "external_papers": [], "chunks_stored": True, "analysis": {}, "sources_origin": [], "error": None}
+    chunks = [_make_chunk("p1", text="Fallback text.")]
+    llm_response_json = (
+        '{"summary":"Fallback summary.","agreements":[],'
+        '"contradictions":[],"researchGaps":[],"citations":[]}'
+    )
+    mock_response = _make_openai_response(llm_response_json)
+
+    state = _base_state(
+        question="test",
+        reranked_chunks=[],
+        retrieved_chunks=chunks,
+    )
+
+    with patch("app.agents.analysis_agent.AsyncOpenAI") as mock_openai_cls:
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_openai_cls.return_value = mock_client
+
+        state = await analysis_agent(state)
+
+    assert state["analysis"]["summary"] == "Fallback summary."
+
+
+@pytest.mark.asyncio
+async def test_analysis_agent_handles_empty_db() -> None:
+    """When all chunk sources are empty, analysis returns a graceful empty response."""
+    from app.agents.analysis_agent import analysis_agent
+
+    state = _base_state(
+        question="q",
+        reranked_chunks=[],
+        retrieved_chunks=[],
+    )
 
     with patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = []
@@ -206,20 +495,68 @@ async def test_analysis_agent_handles_empty_db() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_supervisor_cache_hit_returns_early() -> None:
+    """When cache_checker finds a hit, the pipeline short-circuits to END."""
+    from app.agents.supervisor import run_research_pipeline
+
+    cached_answer = {
+        "summary": "Cached answer.",
+        "agreements": [],
+        "contradictions": [],
+        "researchGaps": [],
+        "citations": [],
+    }
+
+    mock_embedding = [0.1] * 384
+
+    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+         patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=cached_answer):
+
+        mock_model = MagicMock()
+        mock_enc = MagicMock()
+        mock_enc.tolist.return_value = mock_embedding
+        mock_model.encode.return_value = mock_enc
+        mock_model_fn.return_value = mock_model
+
+        result = await run_research_pipeline("cached query")
+
+    assert result["cacheHit"] is True
+    assert result["summary"] == "Cached answer."
+
+
+@pytest.mark.asyncio
 async def test_supervisor_local_path() -> None:
     """When local results are sufficient, external search is skipped."""
     from app.agents.supervisor import run_research_pipeline
     from app.config import settings
 
-    sufficient_chunks = [_make_chunk(f"p{i}") for i in range(settings.min_relevant_chunks + 1)]
+    sufficient_chunks = [_make_chunk(f"p{i}", distance=0.05) for i in range(settings.min_relevant_chunks + 1)]
+    mock_embedding = [0.1] * 384
 
-    claude_json = '{"summary":"Local summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
-    mock_response = _make_openai_response(claude_json)
+    llm_json = (
+        '{"summary":"Local summary.","agreements":[],'
+        '"contradictions":[],"researchGaps":[],"citations":[]}'
+    )
+    mock_response = _make_openai_response(llm_json)
 
-    with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
-         patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = True
+    mock_bm25.search.return_value = sufficient_chunks
+
+    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+         patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
+         patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
+         patch("app.agents.retriever.bm25_index", mock_bm25), \
+         patch("app.agents.reranker_agent.reranker.rerank", return_value=[dict(c, rerank_score=1.0) for c in sufficient_chunks]), \
          patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock), \
          patch("app.agents.external_search_agent._call_mcp_tool", new_callable=AsyncMock, return_value=[]):
+
+        mock_model = MagicMock()
+        mock_enc = MagicMock()
+        mock_enc.tolist.return_value = mock_embedding
+        mock_model.encode.return_value = mock_enc
+        mock_model_fn.return_value = mock_model
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -233,6 +570,8 @@ async def test_supervisor_local_path() -> None:
     assert result["question"] == "What are transformers?"
     assert result["externalPapersFetched"] is False
     assert result["newPapersCount"] == 0
+    assert result["cacheHit"] is False
+    assert "confidenceScore" in result
 
 
 @pytest.mark.asyncio
@@ -240,23 +579,49 @@ async def test_supervisor_external_path() -> None:
     """When local results are insufficient, external search is triggered."""
     from app.agents.supervisor import run_research_pipeline
 
-    external_papers = [
-        {"paper_id": "ext1", "title": "External Paper", "authors": ["X"], "year": 2022, "abstract": "Abstract text", "doi": "", "url": "", "source": "external"}
-    ]
+    mock_embedding = [0.1] * 384
 
-    claude_json = '{"summary":"External summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
-    mock_response = _make_openai_response(claude_json)
+    llm_json = (
+        '{"summary":"External summary.","agreements":[],'
+        '"contradictions":[],"researchGaps":[],"citations":[]}'
+    )
+    mock_response = _make_openai_response(llm_json)
+
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = True
+    mock_bm25.search.return_value = []
+
+    mcp_paper = {
+        "title": "External Paper",
+        "authors": ["X"],
+        "published_date": "2022-01-01",
+        "abstract": "Abstract text",
+        "doi": "",
+        "url": "",
+        "paper_id": "arxiv:ext1",
+    }
 
     async def mock_mcp_tool(tool_name: str, args: dict) -> list[dict]:
-        if tool_name == "search_papers":
-            return external_papers
+        if tool_name == "search_arxiv":
+            return [mcp_paper]
         return []
 
-    with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+         patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
+         patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.retriever.bm25_index", mock_bm25), \
+         patch("app.agents.reranker_agent.reranker.rerank", return_value=[]), \
          patch("app.agents.external_search_agent._call_mcp_tool", side_effect=mock_mcp_tool), \
          patch("app.agents.process_agent.ingest_paper", new_callable=AsyncMock, return_value=2), \
          patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls:
+         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock):
+
+        mock_model = MagicMock()
+        mock_enc = MagicMock()
+        mock_enc.tolist.return_value = mock_embedding
+        mock_model.encode.return_value = mock_enc
+        mock_model_fn.return_value = mock_model
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -266,4 +631,5 @@ async def test_supervisor_external_path() -> None:
 
     assert result["question"] == "novel topic with no local papers"
     assert result["externalPapersFetched"] is True
-    assert result["newPapersCount"] == 1  # 1 paper with non-empty abstract
+    assert result["newPapersCount"] == 1
+    assert result["cacheHit"] is False

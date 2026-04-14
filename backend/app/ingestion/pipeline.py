@@ -1,6 +1,9 @@
-# Phase 3 (backend agent): implement the unified ingestion pipeline
-# clean → chunk → embed → store
+# Unified ingestion pipeline: clean → chunk → embed → store
 # This is the ONLY place that does chunking and storing. Agents must call this.
+#
+# All chunks are stored in the 'chunks' ChromaDB collection via
+# vector_store.add_documents().  The BM25 index is rebuilt after every
+# successful ingestion so hybrid search stays current.
 
 import re
 
@@ -74,7 +77,16 @@ async def ingest_paper(
             }
         )
 
-    # 4. Store in ChromaDB
+    # 4. Store in ChromaDB ('chunks' collection)
     await vector_store.add_documents(chunks)
+
+    # 5. Rebuild BM25 index so hybrid search reflects the new content
+    try:
+        from app.tools.bm25_search import bm25_index  # noqa: PLC0415
+
+        await bm25_index.build_index()
+    except Exception:
+        # Non-fatal: hybrid search will fall back to vector-only on next query
+        pass
 
     return len(chunks)

@@ -1,10 +1,24 @@
-"""Research Pipeline Supervisor — Phase 5.
+"""Research Pipeline Supervisor — Phase B.
 
-Orchestrates the four agents using a LangGraph StateGraph:
+Orchestrates all agents using a LangGraph StateGraph:
 
-    local_search
-        ├── (sufficient) ──→ analysis ──→ END
-        └── (insufficient) → external_search → process → analysis → END
+    query_processor
+        ↓
+    cache_checker
+        ├── cache_hit=True  ──────────────────────────────────→ END
+        └── cache_hit=False
+                ↓
+            retriever
+                ↓
+            reranker_agent
+                ↓
+            confidence_evaluator
+                ├── local_sufficient=True  → analysis_agent → storage_agent → END
+                └── local_sufficient=False → external_search_agent → END
+                                              (returns candidates only;
+                                               ingestion happens after
+                                               professor confirms via
+                                               POST /api/research/confirm)
 """
 
 import uuid
@@ -14,49 +28,130 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.agents.analysis_agent import analysis_agent
+from app.agents.cache_checker import cache_checker
+from app.agents.confidence_evaluator import confidence_evaluator
 from app.agents.external_search_agent import external_search_agent
-from app.agents.local_search_agent import local_search_agent
-from app.agents.process_agent import process_agent
+from app.agents.query_processor import query_processor
+from app.agents.reranker_agent import reranker_agent
+from app.agents.retriever import retriever
+from app.agents.storage_agent import storage_agent
 
+
+# ---------------------------------------------------------------------------
+# Shared state schema
+# ---------------------------------------------------------------------------
 
 class ResearchState(TypedDict):
+    # Core inputs
     question: str
+    error: str | None
+
+    # Phase B — query processing
+    normalized_query: str
+    query_embedding: list[float]
+
+    # Phase B — cache
+    cache_hit: bool
+    cached_answer: dict
+
+    # Phase B — hybrid retrieval
+    retrieved_chunks: list[dict]
+
+    # Phase B — reranking
+    reranked_chunks: list[dict]
+
+    # Phase B — confidence
+    confidence_score: float
+
+    # Legacy fields kept for external_search / process path compatibility
     local_results: list[dict]
     local_sufficient: bool
     external_papers: list[dict]
-    chunks_stored: bool
-    analysis: dict
     sources_origin: list[str]
-    error: str | None
+    chunks_stored: bool
+
+    # Final output
+    analysis: dict
+
+    # Phase B — post-analysis storage
+    answer_stored: bool
 
 
-def _route_after_local_search(state: ResearchState) -> str:
-    """Conditional edge: go to analysis if local results are sufficient."""
+# ---------------------------------------------------------------------------
+# Routing functions
+# ---------------------------------------------------------------------------
+
+def _route_after_cache(state: ResearchState) -> str:
+    """After cache_checker: short-circuit on hit, else proceed to retriever."""
+    return "end" if state.get("cache_hit", False) else "retriever"
+
+
+def _route_after_confidence(state: ResearchState) -> str:
+    """After confidence_evaluator: go straight to analysis or external search.
+
+    When local content is insufficient, the graph fetches external candidates
+    but does NOT ingest them.  The API layer returns them for user selection
+    via the two-step /confirm flow, which runs process_agent only on the
+    papers the professor approves.
+    """
     return "analyze" if state.get("local_sufficient", False) else "external_search"
 
+
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
 
 def _build_graph() -> StateGraph:
     workflow = StateGraph(ResearchState)
 
-    workflow.add_node("local_search", local_search_agent)
+    # Register all nodes
+    workflow.add_node("query_processor", query_processor)
+    workflow.add_node("cache_checker", cache_checker)
+    workflow.add_node("retriever", retriever)
+    workflow.add_node("reranker_agent", reranker_agent)
+    workflow.add_node("confidence_evaluator", confidence_evaluator)
     workflow.add_node("external_search", external_search_agent)
-    workflow.add_node("process", process_agent)
     workflow.add_node("analyze", analysis_agent)
+    workflow.add_node("storage_agent", storage_agent)
 
-    workflow.set_entry_point("local_search")
+    # Entry point
+    workflow.set_entry_point("query_processor")
 
+    # Linear edges
+    workflow.add_edge("query_processor", "cache_checker")
+
+    # Cache branch
     workflow.add_conditional_edges(
-        "local_search",
-        _route_after_local_search,
+        "cache_checker",
+        _route_after_cache,
+        {
+            "end": END,
+            "retriever": "retriever",
+        },
+    )
+
+    # Retrieval → reranking → confidence
+    workflow.add_edge("retriever", "reranker_agent")
+    workflow.add_edge("reranker_agent", "confidence_evaluator")
+
+    # Confidence branch
+    workflow.add_conditional_edges(
+        "confidence_evaluator",
+        _route_after_confidence,
         {
             "analyze": "analyze",
             "external_search": "external_search",
         },
     )
 
-    workflow.add_edge("external_search", "process")
-    workflow.add_edge("process", "analyze")
-    workflow.add_edge("analyze", END)
+    # External search path — goes straight to END so the API layer can
+    # return candidates for professor approval.  process_agent + analysis
+    # only run after the professor confirms via POST /api/research/confirm.
+    workflow.add_edge("external_search", END)
+
+    # Local-sufficient path: analyze → storage → END
+    workflow.add_edge("analyze", "storage_agent")
+    workflow.add_edge("storage_agent", END)
 
     return workflow
 
@@ -64,6 +159,10 @@ def _build_graph() -> StateGraph:
 # Compile once at import time so we don't rebuild the graph on every request
 _compiled_graph = _build_graph().compile()
 
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 async def run_research_pipeline(question: str) -> dict:
     """Run the full multi-agent research pipeline.
@@ -74,28 +173,57 @@ async def run_research_pipeline(question: str) -> dict:
     Returns:
         dict compatible with the frontend QueryResult type:
         id, question, createdAt, summary, agreements, contradictions,
-        researchGaps, citations.
+        researchGaps, citations, externalPapersFetched, newPapersCount,
+        confidenceScore, cacheHit.
     """
     initial_state: ResearchState = {
         "question": question,
+        "error": None,
+        # Phase B
+        "normalized_query": "",
+        "query_embedding": [],
+        "cache_hit": False,
+        "cached_answer": {},
+        "retrieved_chunks": [],
+        "reranked_chunks": [],
+        "confidence_score": 0.0,
+        "answer_stored": False,
+        # Legacy
         "local_results": [],
         "local_sufficient": False,
         "external_papers": [],
+        "sources_origin": [],
         "chunks_stored": False,
         "analysis": {},
-        "sources_origin": [],
-        "error": None,
     }
 
     final_state: ResearchState = await _compiled_graph.ainvoke(initial_state)
 
+    # --- Cache hit path: return cached answer directly with metadata ---
+    if final_state.get("cache_hit", False):
+        cached = final_state.get("cached_answer", {})
+        return {
+            "id": str(uuid.uuid4()),
+            "question": question,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "summary": cached.get("summary", ""),
+            "agreements": cached.get("agreements", []),
+            "contradictions": cached.get("contradictions", []),
+            "researchGaps": cached.get("researchGaps", []),
+            "citations": cached.get("citations", []),
+            "externalPapersFetched": False,
+            "newPapersCount": 0,
+            "confidenceScore": final_state.get("confidence_score", 0.0),
+            "cacheHit": True,
+        }
+
+    # --- Normal path: assemble from analysis ---
     analysis = final_state.get("analysis", {})
 
     external_papers = final_state.get("external_papers", [])
     external_papers_fetched = (
         not final_state.get("local_sufficient", True) and len(external_papers) > 0
     )
-    # Count only papers that had an abstract (those actually ingested)
     new_papers_count = len([p for p in external_papers if p.get("abstract")])
 
     return {
@@ -109,4 +237,9 @@ async def run_research_pipeline(question: str) -> dict:
         "citations": analysis.get("citations", []),
         "externalPapersFetched": external_papers_fetched,
         "newPapersCount": new_papers_count,
+        "confidenceScore": final_state.get("confidence_score", 0.0),
+        "cacheHit": False,
+        # Phase C: pass through so the API layer can offer two-step selection
+        "external_papers": external_papers,
+        "local_sufficient": final_state.get("local_sufficient", True),
     }

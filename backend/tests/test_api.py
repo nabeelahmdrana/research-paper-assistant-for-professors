@@ -149,18 +149,41 @@ async def test_run_research_empty_question(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_run_research_returns_result(client: AsyncClient) -> None:
-    """Phase 5 pipeline is wired — /api/research returns a structured result."""
+    """Phase B pipeline is wired — /api/research returns a structured result."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    mock_content = MagicMock()
-    mock_content.text = '{"summary":"Test summary.","agreements":[],"contradictions":[],"researchGaps":[],"citations":[]}'
+    mock_message = MagicMock()
+    mock_message.content = (
+        '{"summary":"Test summary.","agreements":[],'
+        '"contradictions":[],"researchGaps":[],"citations":[]}'
+    )
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
     mock_response = MagicMock()
-    mock_response.content = [mock_content]
+    mock_response.choices = [mock_choice]
 
-    with patch("app.agents.local_search_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.external_search_agent.search_semantic_scholar", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.external_search_agent.search_arxiv", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]):
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = True
+    mock_bm25.search.return_value = []
+
+    mock_model = MagicMock()
+    mock_enc = MagicMock()
+    mock_enc.tolist.return_value = [0.1] * 384
+    mock_model.encode.return_value = mock_enc
+
+    with patch("app.agents.query_processor._get_model", return_value=mock_model), \
+         patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
+         patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.retriever.bm25_index", mock_bm25), \
+         patch("app.agents.reranker_agent.reranker.rerank", return_value=[]), \
+         patch("app.agents.external_search_agent._call_mcp_tool", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock):
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_cls.return_value = mock_client
 
         response = await client.post(
             "/api/research",

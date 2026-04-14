@@ -1,7 +1,9 @@
 import asyncio
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -11,9 +13,16 @@ from app.config import settings
 from app.ingestion.pdf_ingester import ingest_pdf_file
 from app.ingestion.pipeline import ingest_paper
 from app.ingestion.url_ingester import ingest_by_doi_or_url
+from app.models.schemas import SaveExternalPaperRequest
 from app.tools import vector_store
 
 router = APIRouter()
+
+
+def _make_paper_id(title: str) -> str:
+    """Derive a stable paper_id slug from a title when no API id is available."""
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower())[:40]
+    return f"ext_{slug}"
 
 
 def _build_paper_response(raw: dict) -> dict:
@@ -255,9 +264,7 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
 
         paper_id = (paper.get("paper_id") or "").strip()
         if not paper_id:
-            import re
-            slug = re.sub(r"[^a-z0-9]+", "_", title.lower())[:40]
-            paper_id = f"ext_{slug}"
+            paper_id = _make_paper_id(title)
 
         metadata = {
             "paper_id": paper_id,
@@ -283,6 +290,54 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
             "chunks": total_chunks,
             "errors": errors,
         },
+        "error": None,
+        "status": 200,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/save-external  — ingest a single external paper directly
+# ---------------------------------------------------------------------------
+
+@router.post("/papers/save-external")
+async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
+    """Ingest a single external paper (e.g. from an external search result) into ChromaDB.
+
+    Useful when the frontend wants to save a paper the professor has explicitly
+    chosen, without going through the bulk import flow.
+
+    Returns the number of chunks stored.
+    """
+    abstract = body.abstract.strip()
+    if not abstract:
+        raise HTTPException(status_code=400, detail="abstract is required and cannot be empty")
+
+    title = body.title.strip()
+
+    authors_str = ", ".join(body.authors) if body.authors else ""
+
+    paper_id = body.paper_id.strip()
+    if not paper_id:
+        paper_id = _make_paper_id(title)
+
+    metadata: dict = {
+        "paper_id": paper_id,
+        "title": title,
+        "authors": authors_str,
+        "year": str(body.year),
+        "source": "external",
+        "doi": body.doi or "",
+        "url": body.url or "",
+        "date_added": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        chunks_stored = await ingest_paper(abstract, metadata)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
+
+    return {
+        "data": {"chunks_stored": chunks_stored, "paper_id": paper_id},
         "error": None,
         "status": 200,
     }
@@ -327,9 +382,18 @@ async def delete_paper(paper_id: str) -> dict:
 # GET /api/stats
 # ---------------------------------------------------------------------------
 
+def _get_db_size_mb() -> float:
+    """Calculate the total size of the ChromaDB directory in megabytes."""
+    db_path = Path(settings.chroma_db_path)
+    if not db_path.exists():
+        return 0.0
+    total = sum(f.stat().st_size for f in db_path.rglob("*") if f.is_file())
+    return round(total / (1024 * 1024), 2)
+
+
 @router.get("/stats")
 async def get_stats() -> dict:
-    """Return DB statistics: paper count, connection status."""
+    """Return DB statistics: paper count, DB size, connection status."""
     paper_count = 0
     is_connected = False
     try:
@@ -341,7 +405,7 @@ async def get_stats() -> dict:
     return {
         "data": {
             "paperCount": paper_count,
-            "dbSizeMB": 0,
+            "dbSizeMB": _get_db_size_mb(),
             "isConnected": is_connected,
         },
         "error": None,

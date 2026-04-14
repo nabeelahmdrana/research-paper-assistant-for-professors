@@ -1,16 +1,23 @@
-"""Analysis Agent — Phase 5.
+"""Analysis Agent — Phase 5 / Phase B.
 
-Retrieves the most relevant chunks from ChromaDB (after local and/or external
-papers have been stored) and calls Claude to generate a structured literature
-review: summary, agreements, contradictions, research gaps, and citations.
+Uses the reranked chunks already selected by the retriever + reranker pipeline
+to call an OpenAI-compatible LLM and generate a structured literature review:
+summary, agreements, contradictions, research gaps, and citations.
+
+If ``reranked_chunks`` is populated in state it is used directly.
+If empty, the agent falls back to ``retrieved_chunks[:12]``.
+As a last resort it re-queries ChromaDB directly (backward-compatible path).
 """
 
 import json
+import logging
 
 from openai import AsyncOpenAI
 
 from app.config import settings
 from app.tools import vector_store
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
 You are an expert academic research assistant helping a professor analyse the
@@ -114,10 +121,12 @@ def _build_context(chunks: list[dict]) -> tuple[str, list[dict]]:
 
 
 async def analysis_agent(state: dict) -> dict:
-    """Retrieve relevant chunks and generate a literature review with Claude.
+    """Generate a literature review using an OpenAI-compatible LLM.
 
-    Always re-queries ChromaDB after process_agent has stored any external
-    papers, so both local and external content are considered.
+    Chunk selection priority:
+        1. state["reranked_chunks"]     — best (cross-encoder selected)
+        2. state["retrieved_chunks"][:12] — fallback if reranker was skipped
+        3. Fresh ChromaDB query          — last-resort backward-compat path
 
     Populates:
         state["analysis"] – dict with summary, agreements, contradictions,
@@ -125,9 +134,15 @@ async def analysis_agent(state: dict) -> dict:
     """
     question: str = state["question"]
 
-    # Re-query now that all papers (local + external) are in ChromaDB
-    n_fetch = max(settings.min_relevant_chunks * 3, 30)
-    chunks = await vector_store.query(question, n_results=n_fetch)
+    # Prefer reranked chunks; fall back gracefully
+    chunks: list[dict] = state.get("reranked_chunks", [])
+    if not chunks:
+        chunks = state.get("retrieved_chunks", [])[:12]
+
+    if not chunks:
+        # Last resort: re-query ChromaDB (legacy / external-search path)
+        n_fetch = max(settings.min_relevant_chunks * 3, 30)
+        chunks = await vector_store.query(question, n_results=n_fetch)
 
     if not chunks:
         # No content at all — return a graceful empty analysis
@@ -150,7 +165,10 @@ async def analysis_agent(state: dict) -> dict:
         "Now produce the JSON literature review following the format in the system prompt."
     )
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
 
     try:
         response = await client.chat.completions.create(

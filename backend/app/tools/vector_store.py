@@ -1,33 +1,100 @@
-# Phase 3 (backend agent): implement ChromaDB operations here
-# All ChromaDB access in the project goes through this file only
+# All ChromaDB access in the project goes through this module only.
+#
+# Three collections are used:
+#   papers_meta  — one document per paper (title, authors, year, abstract, …)
+#   chunks       — chunked text used for retrieval / RAG
+#   answers      — cached query embeddings + structured answers (semantic cache)
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 from app.config import settings
 
-_collection: chromadb.Collection | None = None
+# ---------------------------------------------------------------------------
+# Shared ChromaDB client (singleton)
+# ---------------------------------------------------------------------------
+
+_client: chromadb.ClientAPI | None = None
+_embedding_fn: SentenceTransformerEmbeddingFunction | None = None
+
+# Per-collection singletons
+_chunks_collection: chromadb.Collection | None = None
+_papers_meta_collection: chromadb.Collection | None = None
+_answers_collection: chromadb.Collection | None = None
 
 
-def get_collection() -> chromadb.Collection:
-    """Return the ChromaDB collection, creating it once and reusing it."""
-    global _collection
-    if _collection is None:
-        # Use local sentence-transformers for embeddings — no API key required.
-        embedding_fn = SentenceTransformerEmbeddingFunction(
+def _get_client() -> chromadb.ClientAPI:
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=settings.chroma_db_path)
+    return _client
+
+
+def _get_embedding_fn() -> SentenceTransformerEmbeddingFunction:
+    global _embedding_fn
+    if _embedding_fn is None:
+        _embedding_fn = SentenceTransformerEmbeddingFunction(
             model_name=settings.embedding_model,
         )
-        client = chromadb.PersistentClient(path=settings.chroma_db_path)
-        _collection = client.get_or_create_collection(
-            name=settings.chroma_collection_name,
-            embedding_function=embedding_fn,
+    return _embedding_fn
+
+
+# ---------------------------------------------------------------------------
+# Collection accessors
+# ---------------------------------------------------------------------------
+
+def get_chunks_collection() -> chromadb.Collection:
+    """Return the 'chunks' collection (chunked paper text for retrieval)."""
+    global _chunks_collection
+    if _chunks_collection is None:
+        _chunks_collection = _get_client().get_or_create_collection(
+            name="chunks",
+            embedding_function=_get_embedding_fn(),
             metadata={"hnsw:space": "cosine"},
         )
-    return _collection
+    return _chunks_collection
 
+
+def get_papers_meta_collection() -> chromadb.Collection:
+    """Return the 'papers_meta' collection (one doc per paper)."""
+    global _papers_meta_collection
+    if _papers_meta_collection is None:
+        _papers_meta_collection = _get_client().get_or_create_collection(
+            name="papers_meta",
+            embedding_function=_get_embedding_fn(),
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _papers_meta_collection
+
+
+def get_answers_collection() -> chromadb.Collection:
+    """Return the 'answers' collection (semantic answer cache)."""
+    global _answers_collection
+    if _answers_collection is None:
+        _answers_collection = _get_client().get_or_create_collection(
+            name="answers",
+            embedding_function=_get_embedding_fn(),
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _answers_collection
+
+
+# ---------------------------------------------------------------------------
+# Legacy accessor kept for backward compatibility with existing callers
+# (papers.py API routes use get_collection() directly)
+# ---------------------------------------------------------------------------
+
+def get_collection() -> chromadb.Collection:
+    """Return the chunks collection (backward-compatible alias)."""
+    return get_chunks_collection()
+
+
+# ---------------------------------------------------------------------------
+# Chunk CRUD — operates on the 'chunks' collection
+# ---------------------------------------------------------------------------
 
 async def add_documents(chunks: list[dict]) -> None:
-    """Add document chunks to ChromaDB.
+    """Add document chunks to the 'chunks' collection.
 
     Each chunk must have keys: id, text, metadata.
     metadata should include: title, authors, year, source, doi, paper_id, chunk_index.
@@ -35,7 +102,7 @@ async def add_documents(chunks: list[dict]) -> None:
     if not chunks:
         return
 
-    collection = get_collection()
+    collection = get_chunks_collection()
     ids = [chunk["id"] for chunk in chunks]
     documents = [chunk["text"] for chunk in chunks]
     metadatas = [chunk["metadata"] for chunk in chunks]
@@ -44,11 +111,11 @@ async def add_documents(chunks: list[dict]) -> None:
 
 
 async def query(text: str, n_results: int = 10) -> list[dict]:
-    """Query ChromaDB for relevant chunks.
+    """Vector-similarity query against the 'chunks' collection.
 
     Returns a list of dicts with keys: id, text, metadata, distance.
     """
-    collection = get_collection()
+    collection = get_chunks_collection()
     count = collection.count()
     if count == 0:
         return []
@@ -75,12 +142,118 @@ async def query(text: str, n_results: int = 10) -> list[dict]:
     return output
 
 
+async def query_with_embeddings(
+    text: str,
+    n_results: int = 10,
+) -> tuple[list[dict], list[list[float]]]:
+    """Like query() but also returns the raw embedding vectors for each result.
+
+    Returns:
+        (chunks, embeddings) where embeddings[i] corresponds to chunks[i].
+    """
+    collection = get_chunks_collection()
+    count = collection.count()
+    if count == 0:
+        return [], []
+
+    actual_n = min(n_results, count)
+    results = collection.query(
+        query_texts=[text],
+        n_results=actual_n,
+        include=["documents", "metadatas", "distances", "embeddings"],
+    )
+
+    chunks: list[dict] = []
+    raw_embeddings: list[list[float]] = []
+
+    ids = results["ids"][0]
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    distances = results["distances"][0]
+    embeddings = (results.get("embeddings") or [[]])[0]
+
+    for i, (doc_id, doc_text, meta, dist) in enumerate(
+        zip(ids, documents, metadatas, distances)
+    ):
+        chunks.append(
+            {
+                "id": doc_id,
+                "text": doc_text,
+                "metadata": meta,
+                "distance": dist,
+            }
+        )
+        raw_embeddings.append(embeddings[i] if i < len(embeddings) else [])
+
+    return chunks, raw_embeddings
+
+
+async def get_all_chunks() -> list[dict]:
+    """Return all chunks stored in the 'chunks' collection.
+
+    Used by the BM25 index builder at startup.
+    """
+    collection = get_chunks_collection()
+    if collection.count() == 0:
+        return []
+
+    all_docs = collection.get()
+    ids = all_docs.get("ids") or []
+    documents = all_docs.get("documents") or []
+    metadatas = all_docs.get("metadatas") or []
+
+    output: list[dict] = []
+    for doc_id, doc_text, meta in zip(ids, documents, metadatas):
+        output.append(
+            {
+                "id": doc_id,
+                "text": doc_text or "",
+                "metadata": meta or {},
+            }
+        )
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Paper metadata CRUD — operates on 'papers_meta' collection
+# ---------------------------------------------------------------------------
+
+async def upsert_paper_meta(paper_id: str, text: str, metadata: dict) -> None:
+    """Insert or update a paper's metadata entry in 'papers_meta'."""
+    collection = get_papers_meta_collection()
+    # ChromaDB upsert: add if missing, update if present
+    collection.upsert(
+        ids=[paper_id],
+        documents=[text],
+        metadatas=[metadata],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared list / delete helpers — operate on 'chunks' for backward compat
+# ---------------------------------------------------------------------------
+
 async def list_papers() -> list[dict]:
-    """List all unique papers stored in ChromaDB.
+    """List all unique papers stored in the 'chunks' collection.
 
     Deduplicates by paper_id in metadata and returns one record per paper.
+    Falls back to the legacy 'research_papers' collection if the 'chunks'
+    collection is empty (migration path for existing data).
     """
-    collection = get_collection()
+    collection = get_chunks_collection()
+
+    # Fallback: check the legacy collection if chunks is empty
+    if collection.count() == 0:
+        try:
+            legacy = _get_client().get_collection(
+                name=settings.chroma_collection_name,
+                embedding_function=_get_embedding_fn(),
+            )
+            if legacy.count() > 0:
+                collection = legacy
+        except Exception:
+            pass
+
     if collection.count() == 0:
         return []
 
@@ -111,28 +284,70 @@ async def list_papers() -> list[dict]:
 
 
 async def delete_paper(paper_id: str) -> bool:
-    """Delete all chunks for a given paper.
+    """Delete all chunks for a given paper from 'chunks' (and papers_meta if present).
 
-    Returns True if deletion was attempted, False if paper not found.
+    Returns True if any deletion was performed, False if the paper was not found.
     """
-    collection = get_collection()
-    results = collection.get(where={"paper_id": paper_id})
+    chunks_col = get_chunks_collection()
+    results = chunks_col.get(where={"paper_id": paper_id})
     ids_to_delete = results.get("ids", [])
 
-    if not ids_to_delete:
-        return False
+    deleted = False
+    if ids_to_delete:
+        chunks_col.delete(ids=ids_to_delete)
+        deleted = True
 
-    collection.delete(ids=ids_to_delete)
-    return True
+    # Also clean up papers_meta entry if present
+    meta_col = get_papers_meta_collection()
+    try:
+        meta_col.delete(ids=[paper_id])
+    except Exception:
+        pass
+
+    # Also attempt removal from legacy collection (migration path)
+    try:
+        legacy = _get_client().get_collection(
+            name=settings.chroma_collection_name,
+            embedding_function=_get_embedding_fn(),
+        )
+        legacy_results = legacy.get(where={"paper_id": paper_id})
+        legacy_ids = legacy_results.get("ids", [])
+        if legacy_ids:
+            legacy.delete(ids=legacy_ids)
+            deleted = True
+    except Exception:
+        pass
+
+    return deleted
 
 
 async def paper_count() -> int:
-    """Return the number of unique papers stored."""
-    collection = get_collection()
-    if collection.count() == 0:
-        return 0
+    """Return the number of unique papers stored across chunks + legacy collection."""
+    chunks_col = get_chunks_collection()
+    paper_ids: set[str] = set()
 
-    all_docs = collection.get()
-    metadatas = all_docs.get("metadatas") or []
-    paper_ids = {meta.get("paper_id", "") for meta in metadatas if meta.get("paper_id")}
+    if chunks_col.count() > 0:
+        all_docs = chunks_col.get()
+        metadatas = all_docs.get("metadatas") or []
+        for meta in metadatas:
+            pid = meta.get("paper_id", "")
+            if pid:
+                paper_ids.add(pid)
+
+    # Include legacy collection if it exists
+    try:
+        legacy = _get_client().get_collection(
+            name=settings.chroma_collection_name,
+            embedding_function=_get_embedding_fn(),
+        )
+        if legacy.count() > 0:
+            all_docs = legacy.get()
+            metadatas = all_docs.get("metadatas") or []
+            for meta in metadatas:
+                pid = meta.get("paper_id", "")
+                if pid:
+                    paper_ids.add(pid)
+    except Exception:
+        pass
+
     return len(paper_ids)

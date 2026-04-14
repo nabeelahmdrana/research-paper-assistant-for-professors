@@ -2,14 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Upload, Search, FileText, Clock } from "lucide-react";
+import { Upload, Search, FileText, Clock, BarChart3, Zap, Globe } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import type { Paper, QueryResult, DbStats } from "@/lib/types";
-import { getDbStats, listQueryResults, listPapers } from "@/lib/api";
+import { SkeletonCard } from "@/components/SkeletonCard";
+import type { Paper, QueryResult, DbStats, CacheStats } from "@/lib/types";
+import { getDbStats, listQueryResults, listPapers, getCacheStats } from "@/lib/api";
 
 function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -28,12 +29,31 @@ function formatRelativeTime(isoDate: string): string {
 export default function DashboardPage() {
   const [stats, setStats] = useState<DbStats | null>(null);
   const [recentQueries, setRecentQueries] = useState<QueryResult[]>([]);
+  const [totalQueries, setTotalQueries] = useState(0);
   const [recentPapers, setRecentPapers] = useState<Paper[]>([]);
+  const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [cacheStatsLoading, setCacheStatsLoading] = useState(true);
 
   useEffect(() => {
     getDbStats().then((r) => r.data && setStats(r.data));
-    listQueryResults().then((r) => r.data && setRecentQueries(r.data.results.slice(0, 3)));
-    listPapers().then((r) => r.data && setRecentPapers(r.data.papers.slice(0, 3)));
+    listQueryResults().then((r) => {
+      if (r.data) {
+        setRecentQueries(r.data.results.slice(0, 5));
+        setTotalQueries(r.data.total);
+      }
+    });
+    listPapers().then((r) => {
+      if (r.data) {
+        const sorted = [...r.data.papers].sort(
+          (a, b) => new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime()
+        );
+        setRecentPapers(sorted.slice(0, 5));
+      }
+    });
+    getCacheStats()
+      .then((data) => setCacheStats(data))
+      .catch(() => { /* silent — don't crash dashboard */ })
+      .finally(() => setCacheStatsLoading(false));
   }, []);
 
   const lastActivity: string = (() => {
@@ -66,7 +86,7 @@ export default function DashboardPage() {
         <Card>
           <CardContent className="p-6">
             <p className="text-3xl font-bold text-blue-600">
-              {recentQueries.length}
+              {totalQueries}
             </p>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Search className="w-3 h-3" /> Queries Run
@@ -206,6 +226,54 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Cache Statistics */}
+      {cacheStatsLoading && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      )}
+      {!cacheStatsLoading && cacheStats && cacheStats.total_queries > 0 && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            Pipeline Statistics
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card>
+              <CardContent className="p-6">
+                <p className="text-3xl font-bold text-blue-600">
+                  {Math.round(cacheStats.cache_hit_rate * 100)}%
+                </p>
+                <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
+                  <Zap className="w-3 h-3" /> Cache Hit Rate
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-6">
+                <p className="text-3xl font-bold text-blue-600">
+                  {Math.round(cacheStats.avg_confidence * 100)}%
+                </p>
+                <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
+                  <BarChart3 className="w-3 h-3" /> Avg Confidence
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-6">
+                <p className="text-3xl font-bold text-blue-600">
+                  {Math.round(cacheStats.external_usage_ratio * 100)}%
+                </p>
+                <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
+                  <Globe className="w-3 h-3" /> External Usage
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

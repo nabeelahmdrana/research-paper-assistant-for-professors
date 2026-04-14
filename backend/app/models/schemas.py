@@ -50,3 +50,26 @@ class ApiResponse(BaseModel):
     data: dict | list | None = None
     error: str | None = None
     status: int = 200
+
+
+# ---------------------------------------------------------------------------
+# Phase C — new models
+# ---------------------------------------------------------------------------
+
+class ConfirmSelectionRequest(BaseModel):
+    """Request body for POST /api/research/confirm."""
+
+    result_id: str
+    selected_paper_ids: list[str]
+
+
+class SaveExternalPaperRequest(BaseModel):
+    """Request body for POST /api/papers/save-external."""
+
+    paper_id: str
+    title: str
+    abstract: str
+    authors: list[str]
+    year: str
+    doi: str = ""
+    url: str = ""
