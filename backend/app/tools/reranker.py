@@ -1,22 +1,23 @@
 """Cross-encoder reranker for reducing retrieved chunks before LLM synthesis.
 
-Uses sentence-transformers' CrossEncoder with the
-'cross-encoder/ms-marco-MiniLM-L-6-v2' model to score (query, passage) pairs.
+Uses sentence-transformers' CrossEncoder with the model configured via
+settings.reranker_model (default: BAAI/bge-reranker-large) to score
+(query, passage) pairs.
 
 The model is loaded once at startup and reused for every request.
 
 Usage:
     from app.tools.reranker import reranker
-    top_chunks = reranker.rerank(query, chunks, top_k=12)
+    top_chunks = reranker.rerank(query, chunks, top_k=20)
 """
 
 from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger(__name__)
+from app.config import settings
 
-_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+logger = logging.getLogger(__name__)
 
 
 class Reranker:
@@ -24,20 +25,26 @@ class Reranker:
 
     The model is loaded lazily on the first call to rerank() so that
     import time stays fast even if the model weights need to be downloaded.
+
+    The model name is read from settings.reranker_model so it can be
+    overridden via the RERANKER_MODEL environment variable without code changes.
     """
 
-    def __init__(self, model_name: str = _MODEL_NAME) -> None:
-        self._model_name = model_name
+    def __init__(self) -> None:
+        self._model_name: str | None = None  # resolved lazily from settings
         self._model = None  # loaded on first use
 
     def _load(self) -> None:
         if self._model is not None:
             return
+        # Resolve model name from settings at load time (supports env override)
+        model_name = settings.reranker_model
+        self._model_name = model_name
         try:
             from sentence_transformers import CrossEncoder  # noqa: PLC0415
 
-            self._model = CrossEncoder(self._model_name)
-            logger.info("Reranker: loaded model '%s'", self._model_name)
+            self._model = CrossEncoder(model_name)
+            logger.info("Reranker: loaded model '%s'", model_name)
         except Exception as exc:
             logger.error("Reranker: failed to load model — %s", exc)
             self._model = None
@@ -91,5 +98,6 @@ class Reranker:
         return scored_chunks[:top_k]
 
 
-# Module-level singleton — agents import this directly
+# Module-level singleton — agents import this directly.
+# Model name is resolved from settings.reranker_model on first use.
 reranker = Reranker()

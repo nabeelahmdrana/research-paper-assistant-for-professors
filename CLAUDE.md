@@ -6,8 +6,8 @@ A local-first Research Paper Assistant for professors. Professors pre-load paper
 ## Tech Stack
 - **Frontend:** Next.js 14, TypeScript, Tailwind CSS
 - **Backend:** FastAPI (Python), LangChain, LangGraph, ChromaDB
-- **Embeddings:** all-MiniLM-L6-v2 (sentence-transformers)
-- **LLM:** Claude (Anthropic API)
+- **Embeddings:** text-embedding-3-small (sentence-transformers)
+- **LLM:** GPT-5.2 (OpenAI API)
 - **External APIs:** Semantic Scholar, arXiv
 - **MCP:** paper-search-mcp server
 

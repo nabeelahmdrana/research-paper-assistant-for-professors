@@ -31,6 +31,7 @@ from app.agents.analysis_agent import analysis_agent
 from app.agents.cache_checker import cache_checker
 from app.agents.confidence_evaluator import confidence_evaluator
 from app.agents.external_search_agent import external_search_agent
+from app.agents.query_expander import query_expander
 from app.agents.query_processor import query_processor
 from app.agents.reranker_agent import reranker_agent
 from app.agents.retriever import retriever
@@ -49,6 +50,10 @@ class ResearchState(TypedDict):
     # Phase B — query processing
     normalized_query: str
     query_embedding: list[float]
+    hyde_embedding: list[float]
+
+    # Sprint 4 — multi-query expansion
+    sub_queries: list[str]
 
     # Phase B — cache
     cache_hit: bool
@@ -106,6 +111,7 @@ def _build_graph() -> StateGraph:
 
     # Register all nodes
     workflow.add_node("query_processor", query_processor)
+    workflow.add_node("query_expander", query_expander)
     workflow.add_node("cache_checker", cache_checker)
     workflow.add_node("retriever", retriever)
     workflow.add_node("reranker_agent", reranker_agent)
@@ -117,8 +123,9 @@ def _build_graph() -> StateGraph:
     # Entry point
     workflow.set_entry_point("query_processor")
 
-    # Linear edges
-    workflow.add_edge("query_processor", "cache_checker")
+    # Linear edges — query_expander runs after embedding, before cache check
+    workflow.add_edge("query_processor", "query_expander")
+    workflow.add_edge("query_expander", "cache_checker")
 
     # Cache branch
     workflow.add_conditional_edges(
@@ -144,12 +151,11 @@ def _build_graph() -> StateGraph:
         },
     )
 
-    # External search path — goes straight to END so the API layer can
-    # return candidates for professor approval.  process_agent + analysis
-    # only run after the professor confirms via POST /api/research/confirm.
-    workflow.add_edge("external_search", END)
+    # Both paths converge at analysis: whether local or external, always
+    # generate a literature review from whatever content is available.
+    workflow.add_edge("external_search", "analyze")
 
-    # Local-sufficient path: analyze → storage → END
+    # analyze → storage → END
     workflow.add_edge("analyze", "storage_agent")
     workflow.add_edge("storage_agent", END)
 
@@ -182,12 +188,15 @@ async def run_research_pipeline(question: str) -> dict:
         # Phase B
         "normalized_query": "",
         "query_embedding": [],
+        "hyde_embedding": [],
         "cache_hit": False,
         "cached_answer": {},
         "retrieved_chunks": [],
         "reranked_chunks": [],
         "confidence_score": 0.0,
         "answer_stored": False,
+        # Sprint 4
+        "sub_queries": [],
         # Legacy
         "local_results": [],
         "local_sufficient": False,

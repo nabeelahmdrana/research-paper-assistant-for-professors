@@ -17,14 +17,28 @@ import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { ExternalPaperCard } from "@/components/ExternalPaperCard";
 import { SkeletonRow } from "@/components/SkeletonRow";
 import type { QueryResult, ExternalPaper } from "@/lib/types";
-import { runQuery, confirmExternalPapers, listQueryResults } from "@/lib/api";
+import { runQueryStream, runQuery, confirmExternalPapers, listQueryResults } from "@/lib/api";
 
 type LoadingStep = "idle" | "active" | "done" | "error";
+
+// SSE stage labels from the backend mapped to human-readable display labels.
+const STAGE_LABELS: Record<string, string> = {
+  processing_query: "Processing query...",
+  expanding_query: "Expanding query with paraphrases...",
+  checking_cache: "Checking answer cache...",
+  retrieving: "Searching local database...",
+  reranking: "Reranking results...",
+  evaluating: "Evaluating coverage...",
+  analyzing: "Generating literature review...",
+  searching_external: "Fetching additional papers from external sources...",
+  storing: "Storing answer...",
+};
 
 interface StepState {
   local: LoadingStep;
   external: LoadingStep;
   generating: LoadingStep;
+  currentStageLabel: string;
 }
 
 export default function QueryPage() {
@@ -37,6 +51,7 @@ export default function QueryPage() {
     local: "idle",
     external: "idle",
     generating: "idle",
+    currentStageLabel: "",
   });
 
   const [step, setStep] = useState<"query" | "select">("query");
@@ -44,6 +59,9 @@ export default function QueryPage() {
   const [externalCandidates, setExternalCandidates] = useState<ExternalPaper[]>([]);
   const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
   const [isConfirming, setIsConfirming] = useState(false);
+
+  const [streamingText, setStreamingText] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const [pastQueries, setPastQueries] = useState<QueryResult[]>([]);
   const [pastQueriesLoading, setPastQueriesLoading] = useState(true);
@@ -64,52 +82,106 @@ export default function QueryPage() {
     setIsLoading(true);
     setResult(null);
     setError(null);
+    setStreamingText("");
+    setIsStreaming(false);
     setStep("query");
     setExternalCandidates([]);
     setSelectedPaperIds(new Set());
     setPendingResultId("");
-    setSteps({ local: "active", external: "idle", generating: "idle" });
+    setSteps({ local: "active", external: "idle", generating: "idle", currentStageLabel: "Starting..." });
 
-    try {
-      const response = await runQuery(question);
-
-      if (response.status === "needs_external_selection") {
-        setSteps({ local: "done", external: "done", generating: "idle" });
-        setPendingResultId(response.result_id);
-        setExternalCandidates(response.external_papers);
-        setStep("select");
-      } else {
-        setSteps({ local: "done", external: "done", generating: "done" });
-        setResult(response.data);
-        loadPastQueries();
+    // Map incoming SSE stage to the three-bucket display model
+    const handleStage = (stage: string) => {
+      const label = STAGE_LABELS[stage] ?? stage;
+      if (stage === "analyzing") {
+        // Show the result tabs immediately so summary streams inside them
+        setIsStreaming(true);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to connect to the research pipeline.");
-      setSteps({ local: "error", external: "idle", generating: "idle" });
-    } finally {
+      setSteps((prev) => {
+        // Advance the visual bucket based on which stage we are in
+        if (["processing_query", "expanding_query", "checking_cache", "retrieving", "reranking", "evaluating"].includes(stage)) {
+          return { ...prev, local: "active", currentStageLabel: label };
+        } else if (stage === "searching_external") {
+          return { ...prev, local: "done", external: "active", currentStageLabel: label };
+        } else if (["analyzing", "storing"].includes(stage)) {
+          return { ...prev, local: "done", external: "done", generating: "active", currentStageLabel: label };
+        }
+        return { ...prev, currentStageLabel: label };
+      });
+    };
+
+    const handleComplete = (finalResult: QueryResult) => {
+      setSteps({ local: "done", external: "done", generating: "done", currentStageLabel: "Done" });
+      setStreamingText("");
+      setIsStreaming(false);
+      setResult(finalResult);
       setIsLoading(false);
-    }
+      loadPastQueries();
+    };
+
+    const handleStreamError = (err: Error) => {
+      // SSE failed — fall back to the non-streaming runQuery call
+      runQuery(question)
+        .then((response) => {
+          if (response.status === "needs_external_selection") {
+            setSteps({ local: "done", external: "done", generating: "idle", currentStageLabel: "" });
+            setPendingResultId(response.result_id);
+            setExternalCandidates(response.external_papers);
+            setStep("select");
+          } else {
+            setSteps({ local: "done", external: "done", generating: "done", currentStageLabel: "" });
+            setResult(response.data);
+            loadPastQueries();
+          }
+        })
+        .catch((fallbackErr: unknown) => {
+          setError(fallbackErr instanceof Error ? fallbackErr.message : "Unable to connect to the research pipeline.");
+          setSteps({ local: "error", external: "idle", generating: "idle", currentStageLabel: "" });
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+
+      // Suppress the original SSE error if the fallback is being attempted
+      void err;
+    };
+
+    await runQueryStream(
+      question,
+      "auto",
+      handleStage,
+      handleComplete,
+      handleStreamError,
+      (token) => setStreamingText((prev) => prev + token),
+    );
+    // If stream completed normally, isLoading is already set to false by handleComplete.
+    // If an error occurred and fallback is in flight, it sets isLoading in finally.
+    // Safety: ensure loading is cleared in case the stream ended without complete/error.
+    setIsLoading((prev) => {
+      if (prev) return false;
+      return prev;
+    });
   };
 
   const handleConfirmSelection = async () => {
     if (!pendingResultId) return;
     setIsConfirming(true);
     setError(null);
-    setSteps({ local: "done", external: "done", generating: "active" });
+    setSteps({ local: "done", external: "done", generating: "active", currentStageLabel: "Generating literature review..." });
 
     try {
       const finalResult = await confirmExternalPapers(
         pendingResultId,
         Array.from(selectedPaperIds)
       );
-      setSteps({ local: "done", external: "done", generating: "done" });
+      setSteps({ local: "done", external: "done", generating: "done", currentStageLabel: "" });
       setResult(finalResult);
       setStep("query");
       setExternalCandidates([]);
       loadPastQueries();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process selected papers.");
-      setSteps({ local: "done", external: "done", generating: "error" });
+      setSteps({ local: "done", external: "done", generating: "error", currentStageLabel: "" });
     } finally {
       setIsConfirming(false);
     }
@@ -141,7 +213,7 @@ export default function QueryPage() {
     setExternalCandidates([]);
     setSelectedPaperIds(new Set());
     setPendingResultId("");
-    setSteps({ local: "idle", external: "idle", generating: "idle" });
+    setSteps({ local: "idle", external: "idle", generating: "idle", currentStageLabel: "" });
   };
 
   const handleBackToQuery = () => {
@@ -149,7 +221,7 @@ export default function QueryPage() {
     setExternalCandidates([]);
     setSelectedPaperIds(new Set());
     setPendingResultId("");
-    setSteps({ local: "idle", external: "idle", generating: "idle" });
+    setSteps({ local: "idle", external: "idle", generating: "idle", currentStageLabel: "" });
   };
 
   return (
@@ -208,26 +280,142 @@ export default function QueryPage() {
         <Card className="mb-6">
           <CardContent className="p-6">
             <h3 className="text-sm font-semibold text-gray-700 mb-4">
-              Processing your query...
+              {steps.currentStageLabel ? steps.currentStageLabel : "Processing your query..."}
             </h3>
             <div className="space-y-4">
               <LoadingStepRow
-                label="Searching local database..."
+                label="Searching local database"
                 status={steps.local}
               />
               {steps.external !== "idle" && (
                 <LoadingStepRow
-                  label="Fetching additional papers from external sources..."
+                  label="Fetching additional papers from external sources"
                   status={steps.external}
                 />
               )}
               {steps.generating !== "idle" && (
                 <LoadingStepRow
-                  label="Generating literature review..."
+                  label="Generating literature review"
                   status={steps.generating}
                 />
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Streaming / Results Panel — appears as soon as LLM starts generating */}
+      {(isStreaming || (result && !isLoading && !isConfirming)) && (
+        <Card className="mb-6">
+          <CardContent className="p-6">
+            <Tabs defaultValue="summary">
+              <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
+                <TabsTrigger value="summary">Summary</TabsTrigger>
+                <TabsTrigger value="agreements" disabled={isStreaming}>
+                  Agreements {result ? `(${result.agreements.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="contradictions" disabled={isStreaming}>
+                  Contradictions {result ? `(${result.contradictions.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="gaps" disabled={isStreaming}>
+                  Research Gaps {result ? `(${result.researchGaps.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="citations" disabled={isStreaming}>
+                  Citations {result ? `(${result.citations.length})` : ""}
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="summary">
+                {isStreaming ? (
+                  <p className="text-base text-gray-700 leading-relaxed whitespace-pre-wrap break-words">
+                    {streamingText || <span className="text-gray-400 italic">Generating summary...</span>}
+                    {streamingText && (
+                      <span className="inline-block w-2 h-4 bg-gray-500 ml-0.5 align-middle animate-pulse" />
+                    )}
+                  </p>
+                ) : (
+                  <p className="text-base text-gray-700 leading-relaxed">
+                    {result?.summary}
+                  </p>
+                )}
+              </TabsContent>
+
+              <TabsContent value="agreements">
+                <ul className="space-y-2">
+                  {result?.agreements.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </TabsContent>
+
+              <TabsContent value="contradictions">
+                <ul className="space-y-2">
+                  {result?.contradictions.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </TabsContent>
+
+              <TabsContent value="gaps">
+                <ul className="space-y-2">
+                  {result?.researchGaps.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </TabsContent>
+
+              <TabsContent value="citations">
+                <div className="space-y-3">
+                  {result?.citations.map((citation) => (
+                    <div
+                      key={citation.index}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200"
+                    >
+                      <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0">
+                        {citation.index}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">
+                          {citation.title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {citation.authors.join(", ")} &middot; {citation.year}
+                        </p>
+                        {(citation.doi ?? citation.url) && (
+                          <a
+                            href={citation.url ?? `https://doi.org/${citation.doi}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-500 hover:underline flex items-center gap-1 mt-0.5"
+                          >
+                            {citation.doi ?? citation.url}
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                      <StatusBadge variant={citation.source} />
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            {result && !isStreaming && (
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <Button variant="outline" size="sm" onClick={() => router.push(`/results/${result.id}`)}>
+                  View Full Review &rarr;
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -317,113 +505,9 @@ export default function QueryPage() {
         </div>
       )}
 
-      {/* Results Panel */}
-      {result && !isLoading && !isConfirming && (
-        <Card className="mb-6">
-          <CardContent className="p-6">
-            <Tabs defaultValue="summary">
-              <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
-                <TabsTrigger value="summary">Summary</TabsTrigger>
-                <TabsTrigger value="agreements">
-                  Agreements ({result.agreements.length})
-                </TabsTrigger>
-                <TabsTrigger value="contradictions">
-                  Contradictions ({result.contradictions.length})
-                </TabsTrigger>
-                <TabsTrigger value="gaps">
-                  Research Gaps ({result.researchGaps.length})
-                </TabsTrigger>
-                <TabsTrigger value="citations">
-                  Citations ({result.citations.length})
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="summary">
-                <p className="text-base text-gray-700 leading-relaxed">
-                  {result.summary}
-                </p>
-              </TabsContent>
-
-              <TabsContent value="agreements">
-                <ul className="space-y-2">
-                  {result.agreements.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
-                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </TabsContent>
-
-              <TabsContent value="contradictions">
-                <ul className="space-y-2">
-                  {result.contradictions.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
-                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </TabsContent>
-
-              <TabsContent value="gaps">
-                <ul className="space-y-2">
-                  {result.researchGaps.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
-                      <span className="text-blue-600 font-bold mt-0.5">&bull;</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </TabsContent>
-
-              <TabsContent value="citations">
-                <div className="space-y-3">
-                  {result.citations.map((citation) => (
-                    <div
-                      key={citation.index}
-                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200"
-                    >
-                      <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0">
-                        {citation.index}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-900 truncate">
-                          {citation.title}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {citation.authors.join(", ")} &middot; {citation.year}
-                        </p>
-                        {(citation.doi ?? citation.url) && (
-                          <a
-                            href={citation.url ?? `https://doi.org/${citation.doi}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-500 hover:underline flex items-center gap-1 mt-0.5"
-                          >
-                            {citation.doi ?? citation.url}
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                      </div>
-                      <StatusBadge variant={citation.source} />
-                    </div>
-                  ))}
-                </div>
-              </TabsContent>
-            </Tabs>
-
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <Button variant="outline" size="sm" onClick={() => router.push(`/results/${result.id}`)}>
-                View Full Review &rarr;
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Empty State — only when no past queries either */}
-      {!result && !isLoading && !error && step === "query" && pastQueries.length === 0 && !pastQueriesLoading && (
+      {!result && !isStreaming && !isLoading && !error && step === "query" && pastQueries.length === 0 && !pastQueriesLoading && (
         <EmptyState
           icon={<Search className="w-16 h-16" />}
           title="Ask a research question"

@@ -50,6 +50,27 @@ def _make_openai_response(json_text: str) -> MagicMock:
     return mock_response
 
 
+def _make_mock_query_processor_client(embedding: list[float]) -> AsyncMock:
+    """Build a mock AsyncOpenAI client for query_processor (embeddings + HyDE chat)."""
+    mock_embedding_data = MagicMock()
+    mock_embedding_data.embedding = embedding
+    mock_embed_response = MagicMock()
+    mock_embed_response.data = [mock_embedding_data]
+
+    # HyDE chat response — return empty string so HyDE embedding is skipped
+    mock_chat_msg = MagicMock()
+    mock_chat_msg.content = ""
+    mock_chat_choice = MagicMock()
+    mock_chat_choice.message = mock_chat_msg
+    mock_chat_response = MagicMock()
+    mock_chat_response.choices = [mock_chat_choice]
+
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(return_value=mock_embed_response)
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_chat_response)
+    return mock_client
+
+
 # Helper: full initial state with all Phase B fields
 def _base_state(**overrides: Any) -> dict:
     state: dict[str, Any] = {
@@ -83,11 +104,21 @@ async def test_query_processor_normalises_query() -> None:
     """query_processor strips and lowercases the query and generates an embedding."""
     from app.agents.query_processor import query_processor
 
-    mock_model = MagicMock()
-    mock_model.encode.return_value = MagicMock()
-    mock_model.encode.return_value.tolist.return_value = [0.1, 0.2, 0.3]
+    mock_embedding_data = MagicMock()
+    mock_embedding_data.embedding = [0.1, 0.2, 0.3]
+    mock_embed_response = MagicMock()
+    mock_embed_response.data = [mock_embedding_data]
 
-    with patch("app.agents.query_processor._get_model", return_value=mock_model):
+    # HyDE: mock the chat completion too (returns empty to simplify)
+    mock_chat_response = MagicMock()
+    mock_chat_response.choices = [MagicMock()]
+    mock_chat_response.choices[0].message.content = ""
+
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(return_value=mock_embed_response)
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_chat_response)
+
+    with patch("app.agents.query_processor.AsyncOpenAI", return_value=mock_client):
         state = await query_processor(_base_state(question="  Transformers NLP  "))
 
     assert state["normalized_query"] == "transformers nlp"
@@ -508,15 +539,11 @@ async def test_supervisor_cache_hit_returns_early() -> None:
     }
 
     mock_embedding = [0.1] * 384
+    mock_qp_client = _make_mock_query_processor_client(mock_embedding)
 
-    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+    with patch("app.agents.query_processor.AsyncOpenAI", return_value=mock_qp_client), \
+         patch("app.agents.query_expander.AsyncOpenAI", return_value=mock_qp_client), \
          patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=cached_answer):
-
-        mock_model = MagicMock()
-        mock_enc = MagicMock()
-        mock_enc.tolist.return_value = mock_embedding
-        mock_model.encode.return_value = mock_enc
-        mock_model_fn.return_value = mock_model
 
         result = await run_research_pipeline("cached query")
 
@@ -542,25 +569,21 @@ async def test_supervisor_local_path() -> None:
     mock_bm25 = MagicMock()
     mock_bm25.is_ready = True
     mock_bm25.search.return_value = sufficient_chunks
+    mock_qp_client = _make_mock_query_processor_client(mock_embedding)
 
-    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+    mock_analysis_client = AsyncMock()
+    mock_analysis_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    with patch("app.agents.query_processor.AsyncOpenAI", return_value=mock_qp_client), \
+         patch("app.agents.query_expander.AsyncOpenAI", return_value=mock_qp_client), \
          patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
          patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=sufficient_chunks), \
+         patch("app.agents.retriever.vector_store.query_by_embedding", new_callable=AsyncMock, return_value=sufficient_chunks), \
          patch("app.agents.retriever.bm25_index", mock_bm25), \
          patch("app.agents.reranker_agent.reranker.rerank", return_value=[dict(c, rerank_score=1.0) for c in sufficient_chunks]), \
-         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.analysis_agent.AsyncOpenAI", return_value=mock_analysis_client), \
          patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock), \
          patch("app.agents.external_search_agent._call_mcp_tool", new_callable=AsyncMock, return_value=[]):
-
-        mock_model = MagicMock()
-        mock_enc = MagicMock()
-        mock_enc.tolist.return_value = mock_embedding
-        mock_model.encode.return_value = mock_enc
-        mock_model_fn.return_value = mock_model
-
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
 
         result = await run_research_pipeline("What are transformers?")
 
@@ -606,26 +629,22 @@ async def test_supervisor_external_path() -> None:
             return [mcp_paper]
         return []
 
-    with patch("app.agents.query_processor._get_model") as mock_model_fn, \
+    mock_qp_client = _make_mock_query_processor_client(mock_embedding)
+    mock_analysis_client = AsyncMock()
+    mock_analysis_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    with patch("app.agents.query_processor.AsyncOpenAI", return_value=mock_qp_client), \
+         patch("app.agents.query_expander.AsyncOpenAI", return_value=mock_qp_client), \
          patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
          patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=[]), \
+         patch("app.agents.retriever.vector_store.query_by_embedding", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.retriever.bm25_index", mock_bm25), \
          patch("app.agents.reranker_agent.reranker.rerank", return_value=[]), \
          patch("app.agents.external_search_agent._call_mcp_tool", side_effect=mock_mcp_tool), \
          patch("app.agents.process_agent.ingest_paper", new_callable=AsyncMock, return_value=2), \
          patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.analysis_agent.AsyncOpenAI", return_value=mock_analysis_client), \
          patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock):
-
-        mock_model = MagicMock()
-        mock_enc = MagicMock()
-        mock_enc.tolist.return_value = mock_embedding
-        mock_model.encode.return_value = mock_enc
-        mock_model_fn.return_value = mock_model
-
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
 
         result = await run_research_pipeline("novel topic with no local papers")
 

@@ -125,6 +125,80 @@ export async function runQuery(
   return { status: "complete", data: mapQueryResult(data) };
 }
 
+/**
+ * Streaming version of runQuery — consumes the SSE endpoint.
+ *
+ * @param question  The research question.
+ * @param mode      "auto" | "local" | "external"
+ * @param onStage   Called with each intermediate stage label as it arrives.
+ * @param onComplete Called once with the final QueryResult when done.
+ * @param onError   Called if a network or pipeline error occurs.
+ */
+export async function runQueryStream(
+  question: string,
+  mode: "auto" | "local" | "external" = "auto",
+  onStage: (stage: string) => void,
+  onComplete: (result: QueryResult) => void,
+  onError: (err: Error) => void,
+  onToken?: (token: string) => void
+): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/research/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, mode }),
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error(`Stream request failed: ${res.status} ${res.statusText}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE lines end with \n\n — process all complete events in the buffer
+      const parts = buffer.split("\n\n");
+      // The last part may be incomplete; keep it in the buffer
+      buffer = parts.pop() ?? "";
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const jsonStr = line.slice(5).trim();
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+
+        const stage = String(parsed["stage"] ?? "");
+
+        if (stage === "complete") {
+          const raw = parsed["data"] as Record<string, unknown>;
+          if (raw) onComplete(mapQueryResult(raw));
+          return;
+        } else if (stage === "error") {
+          throw new Error(String(parsed["error"] ?? "Pipeline error"));
+        } else if (stage === "token") {
+          onToken?.(String(parsed["token"] ?? ""));
+        } else {
+          onStage(stage);
+        }
+      }
+    }
+  } catch (err) {
+    onError(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
 export async function confirmExternalPapers(
   result_id: string,
   selected_paper_ids: string[]

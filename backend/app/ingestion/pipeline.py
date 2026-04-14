@@ -12,6 +12,37 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import settings
 from app.tools import vector_store
 
+# ---------------------------------------------------------------------------
+# Section-header detection
+# ---------------------------------------------------------------------------
+
+SECTION_PATTERN = re.compile(
+    r"^(abstract|introduction|related work|background|methodology|methods|"
+    r"results|experiments|discussion|conclusion|conclusions|references|"
+    r"acknowledgments?|appendix)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _detect_section(text: str, current_section: str) -> str:
+    """Return the section label for a chunk of text.
+
+    Scans the chunk for the first matching section header.  If found, that
+    section label is returned; otherwise the current_section is preserved.
+
+    Args:
+        text: The chunk text to inspect.
+        current_section: The section label active before this chunk.
+
+    Returns:
+        Updated section label string (lowercased, spaces replaced with
+        underscores for consistent metadata values).
+    """
+    match = SECTION_PATTERN.search(text)
+    if match:
+        return match.group(1).lower().replace(" ", "_")
+    return current_section
+
 
 def _clean_text(text: str) -> str:
     """Clean extracted text by removing noise and normalizing whitespace.
@@ -54,8 +85,9 @@ async def ingest_paper(
     # 1. Clean text
     cleaned = _clean_text(text)
 
-    # 2. Chunk with RecursiveCharacterTextSplitter
-    splitter = RecursiveCharacterTextSplitter(
+    # 2. Chunk using token-aware splitter (cl100k_base tokenizer, 512 tokens per chunk)
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        encoding_name="cl100k_base",
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
     )
@@ -66,14 +98,16 @@ async def ingest_paper(
 
     paper_id: str = metadata.get("paper_id", "unknown")
 
-    # 3. Build chunk dicts
+    # 3. Build chunk dicts, tracking active section header as we walk the chunks
     chunks: list[dict] = []
+    current_section: str = "body"  # default before any header is detected
     for i, chunk_text in enumerate(raw_chunks):
+        current_section = _detect_section(chunk_text, current_section)
         chunks.append(
             {
                 "id": f"{paper_id}_chunk_{i}",
                 "text": chunk_text,
-                "metadata": {**metadata, "chunk_index": i},
+                "metadata": {**metadata, "chunk_index": i, "section_type": current_section},
             }
         )
 

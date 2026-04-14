@@ -166,24 +166,45 @@ async def test_run_research_returns_result(client: AsyncClient) -> None:
     mock_bm25.is_ready = True
     mock_bm25.search.return_value = []
 
-    mock_model = MagicMock()
-    mock_enc = MagicMock()
-    mock_enc.tolist.return_value = [0.1] * 384
-    mock_model.encode.return_value = mock_enc
+    # Mock the OpenAI client used by query_processor (embeddings + HyDE chat)
+    mock_embed_data = MagicMock()
+    mock_embed_data.embedding = [0.1] * 1536
+    mock_embed_resp = MagicMock()
+    mock_embed_resp.data = [mock_embed_data]
 
-    with patch("app.agents.query_processor._get_model", return_value=mock_model), \
+    mock_hyde_chat_msg = MagicMock()
+    mock_hyde_chat_msg.content = ""
+    mock_hyde_chat_choice = MagicMock()
+    mock_hyde_chat_choice.message = mock_hyde_chat_msg
+    mock_hyde_chat_resp = MagicMock()
+    mock_hyde_chat_resp.choices = [mock_hyde_chat_choice]
+
+    mock_qp_client = AsyncMock()
+    mock_qp_client.embeddings.create = AsyncMock(return_value=mock_embed_resp)
+    mock_qp_client.chat.completions.create = AsyncMock(return_value=mock_hyde_chat_resp)
+
+    # Mock the OpenAI client used by analysis_agent (chat completions)
+    mock_analysis_client = AsyncMock()
+    mock_analysis_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    def _make_openai_client(*args, **kwargs):
+        # Return different mocks depending on which module is constructing the client
+        import traceback
+        stack = "".join(traceback.format_stack())
+        if "query_processor" in stack or "query_expander" in stack:
+            return mock_qp_client
+        return mock_analysis_client
+
+    with patch("app.agents.query_processor.AsyncOpenAI", side_effect=_make_openai_client), \
+         patch("app.agents.query_expander.AsyncOpenAI", return_value=mock_qp_client), \
          patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
          patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.retriever.bm25_index", mock_bm25), \
          patch("app.agents.reranker_agent.reranker.rerank", return_value=[]), \
          patch("app.agents.external_search_agent._call_mcp_tool", new_callable=AsyncMock, return_value=[]), \
          patch("app.agents.analysis_agent.vector_store.query", new_callable=AsyncMock, return_value=[]), \
-         patch("app.agents.analysis_agent.AsyncOpenAI") as mock_cls, \
+         patch("app.agents.analysis_agent.AsyncOpenAI", return_value=mock_analysis_client), \
          patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock):
-
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
 
         response = await client.post(
             "/api/research",

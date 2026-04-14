@@ -117,7 +117,8 @@ async def external_search_agent(state: dict) -> dict:
         state["sources_origin"]   – list of titles of fetched papers
     """
     question: str = state["question"]
-    query_args = {"query": question, "max_results": 10}
+    # Fetch max 2 per source → up to 8 raw candidates after dedup
+    query_args = {"query": question, "max_results": 2}
 
     # Run all four database searches concurrently
     arxiv_papers, pubmed_papers, biorxiv_papers, medrxiv_papers = await asyncio.gather(
@@ -138,10 +139,12 @@ async def external_search_agent(state: dict) -> dict:
     for paper in medrxiv_papers:
         combined.append(_normalise(paper, "medrxiv"))
 
-    # Deduplicate by lower-cased title; skip papers without abstract
+    # Deduplicate by lower-cased title; skip papers without abstract; cap at 8
     seen_titles: set[str] = set()
     deduped: list[dict] = []
     for paper in combined:
+        if len(deduped) >= 8:
+            break
         key = paper["title"].lower().strip()
         if not key or key in seen_titles:
             continue

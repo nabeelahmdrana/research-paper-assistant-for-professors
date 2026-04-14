@@ -7,8 +7,10 @@ triggering external search.
 Score formula:
     avg_similarity  = mean(1 - distance) for each chunk
                       (uses 'distance' key from vector search, or 0.5 default)
-    paper_diversity = min(unique_paper_count / 3, 1.0)   (saturates at 3 papers)
-    confidence      = 0.6 * avg_similarity + 0.4 * paper_diversity
+    rerank_signal   = mean(sigmoid(rerank_score)) over chunks that carry a
+                      rerank_score; falls back to avg_similarity if none present
+    paper_diversity = min(unique_paper_count / 5, 1.0)   (saturates at 5 papers)
+    confidence      = 0.4 * rerank_signal + 0.35 * avg_similarity + 0.25 * paper_diversity
 
 A confidence score >= settings.relevance_threshold (default 0.7) is treated
 as sufficient local coverage.
@@ -24,10 +26,16 @@ Populates:
 from __future__ import annotations
 
 import logging
+from math import exp
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _sigmoid(x: float) -> float:
+    """Sigmoid activation: maps any real number to (0, 1)."""
+    return 1.0 / (1.0 + exp(-x))
 
 
 async def confidence_evaluator(state: dict) -> dict:
@@ -65,21 +73,32 @@ async def confidence_evaluator(state: dict) -> dict:
 
     avg_similarity: float = sum(similarities) / len(similarities)
 
-    # paper_diversity: saturates at 3 unique papers
+    # rerank_signal: sigmoid-normalised mean of cross-encoder scores.
+    # Falls back to avg_similarity when rerank_score is absent (e.g. BM25-only path).
+    rerank_scores: list[float] = [
+        float(c["rerank_score"]) for c in reranked_chunks if "rerank_score" in c
+    ]
+    if rerank_scores:
+        rerank_signal: float = sum(_sigmoid(s) for s in rerank_scores) / len(rerank_scores)
+    else:
+        rerank_signal = avg_similarity
+
+    # paper_diversity: saturates at 5 unique papers (wider than the old /3 cap)
     unique_paper_ids: set[str] = set()
     for chunk in reranked_chunks:
         pid = chunk.get("metadata", {}).get("paper_id", "")
         if pid:
             unique_paper_ids.add(pid)
 
-    paper_diversity: float = min(len(unique_paper_ids) / 3.0, 1.0)
+    paper_diversity: float = min(len(unique_paper_ids) / 5.0, 1.0)
 
-    confidence: float = 0.6 * avg_similarity + 0.4 * paper_diversity
+    confidence: float = 0.4 * rerank_signal + 0.35 * avg_similarity + 0.25 * paper_diversity
     local_sufficient: bool = confidence >= settings.relevance_threshold
 
     logger.info(
-        "ConfidenceEvaluator: avg_sim=%.4f diversity=%.4f confidence=%.4f sufficient=%s",
+        "ConfidenceEvaluator: avg_sim=%.4f rerank_signal=%.4f diversity=%.4f confidence=%.4f sufficient=%s",
         avg_similarity,
+        rerank_signal,
         paper_diversity,
         confidence,
         local_sufficient,

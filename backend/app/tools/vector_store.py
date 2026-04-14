@@ -4,18 +4,36 @@
 #   papers_meta  — one document per paper (title, authors, year, abstract, …)
 #   chunks       — chunked text used for retrieval / RAG
 #   answers      — cached query embeddings + structured answers (semantic cache)
+#
+# MIGRATION NOTE:
+#   The embedding model was changed from all-MiniLM-L6-v2 (dim=384) to
+#   text-embedding-3-small (dim=1536).  Any existing ChromaDB data built with
+#   the old model MUST be cleared before starting with the new model.
+#   The startup check below logs a WARNING if a dimension mismatch is detected.
+
+import logging
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Known embedding dimensions for the startup compatibility check.
+_KNOWN_DIMS: dict[str, int] = {
+    "all-MiniLM-L6-v2": 384,
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
 
 # ---------------------------------------------------------------------------
 # Shared ChromaDB client (singleton)
 # ---------------------------------------------------------------------------
 
 _client: chromadb.ClientAPI | None = None
-_embedding_fn: SentenceTransformerEmbeddingFunction | None = None
+_embedding_fn: OpenAIEmbeddingFunction | None = None
 
 # Per-collection singletons
 _chunks_collection: chromadb.Collection | None = None
@@ -30,13 +48,45 @@ def _get_client() -> chromadb.ClientAPI:
     return _client
 
 
-def _get_embedding_fn() -> SentenceTransformerEmbeddingFunction:
+def _get_embedding_fn() -> OpenAIEmbeddingFunction:
     global _embedding_fn
     if _embedding_fn is None:
-        _embedding_fn = SentenceTransformerEmbeddingFunction(
+        _embedding_fn = OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
             model_name=settings.embedding_model,
         )
     return _embedding_fn
+
+
+def _check_embedding_dimension_compat(collection: chromadb.Collection) -> None:
+    """Log a warning if the collection was built with a different embedding model.
+
+    ChromaDB does not store the model name, but we can detect a mismatch by
+    sampling one stored embedding and comparing its dimension to what the
+    currently configured model would produce.
+    """
+    try:
+        if collection.count() == 0:
+            return
+        sample = collection.get(limit=1, include=["embeddings"])
+        embeddings = sample.get("embeddings") or []
+        if not embeddings or not embeddings[0]:
+            return
+        stored_dim = len(embeddings[0])
+        expected_dim = _KNOWN_DIMS.get(settings.embedding_model)
+        if expected_dim is not None and stored_dim != expected_dim:
+            logger.warning(
+                "EMBEDDING DIMENSION MISMATCH: collection '%s' has stored vectors of "
+                "dim=%d but current model '%s' produces dim=%d.  "
+                "Clear the ChromaDB collections (chroma_db/) and re-ingest all papers "
+                "before running queries.",
+                collection.name,
+                stored_dim,
+                settings.embedding_model,
+                expected_dim,
+            )
+    except Exception:
+        pass  # non-fatal — just a diagnostic check
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +102,7 @@ def get_chunks_collection() -> chromadb.Collection:
             embedding_function=_get_embedding_fn(),
             metadata={"hnsw:space": "cosine"},
         )
+        _check_embedding_dimension_compat(_chunks_collection)
     return _chunks_collection
 
 
@@ -122,6 +173,42 @@ async def query(text: str, n_results: int = 10) -> list[dict]:
 
     actual_n = min(n_results, count)
     results = collection.query(query_texts=[text], n_results=actual_n)
+
+    output: list[dict] = []
+    ids = results["ids"][0]
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    distances = results["distances"][0]
+
+    for doc_id, doc_text, meta, dist in zip(ids, documents, metadatas, distances):
+        output.append(
+            {
+                "id": doc_id,
+                "text": doc_text,
+                "metadata": meta,
+                "distance": dist,
+            }
+        )
+
+    return output
+
+
+async def query_by_embedding(embedding: list[float], n_results: int = 10) -> list[dict]:
+    """Vector-similarity query using a pre-computed embedding vector.
+
+    Unlike query(), this does NOT re-embed the input — it uses the provided
+    vector directly.  Used by HyDE retrieval where the hypothetical document
+    has already been embedded by the query processor.
+
+    Returns a list of dicts with keys: id, text, metadata, distance.
+    """
+    collection = get_chunks_collection()
+    count = collection.count()
+    if count == 0:
+        return []
+
+    actual_n = min(n_results, count)
+    results = collection.query(query_embeddings=[embedding], n_results=actual_n)
 
     output: list[dict] = []
     ids = results["ids"][0]

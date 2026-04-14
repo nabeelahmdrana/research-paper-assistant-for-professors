@@ -16,6 +16,7 @@ Populates:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.tools import vector_store
@@ -85,32 +86,67 @@ async def retriever(state: dict) -> dict:
         Updated state with ``retrieved_chunks`` populated.
     """
     question: str = state.get("question", "")
+    sub_queries: list[str] = state.get("sub_queries", [])
+    hyde_embedding: list[float] = state.get("hyde_embedding", [])
 
-    # 1. Vector search
-    try:
-        vector_chunks: list[dict] = await vector_store.query(question, n_results=_TOP_N)
-    except Exception as exc:
-        logger.error("Retriever: vector search failed — %s", exc)
-        vector_chunks = []
-
-    # 2. BM25 search — rebuild index if not ready
-    try:
-        if not bm25_index.is_ready:
-            logger.info("Retriever: BM25 index is empty — rebuilding from ChromaDB")
+    # Ensure BM25 index is ready before launching parallel searches.
+    # Index build is async so it must complete before asyncio.gather.
+    if not bm25_index.is_ready:
+        logger.info("Retriever: BM25 index is empty — rebuilding from ChromaDB")
+        try:
             await bm25_index.build_index()
+        except Exception as exc:
+            logger.error("Retriever: BM25 index build failed — %s", exc)
 
-        bm25_chunks: list[dict] = bm25_index.search(question, n=_TOP_N)
-    except Exception as exc:
-        logger.error("Retriever: BM25 search failed — %s", exc)
-        bm25_chunks = []
+    async def _hybrid_search(q: str) -> list[dict]:
+        """Run vector + BM25 search concurrently for a single query string."""
+        async def _vec() -> list[dict]:
+            try:
+                return await vector_store.query(q, n_results=_TOP_N)
+            except Exception as exc:
+                logger.error("Retriever: vector search failed ('%s…') — %s", q[:40], exc)
+                return []
 
-    # 3. Merge with RRF
-    merged: list[dict] = _rrf_merge(vector_chunks, bm25_chunks, k=_RRF_K, top_n=_TOP_N)
+        async def _bm25() -> list[dict]:
+            try:
+                return bm25_index.search(q, n=_TOP_N)
+            except Exception as exc:
+                logger.error("Retriever: BM25 search failed ('%s…') — %s", q[:40], exc)
+                return []
+
+        vec_chunks, b25_chunks = await asyncio.gather(_vec(), _bm25())
+        return _rrf_merge(vec_chunks, b25_chunks, k=_RRF_K, top_n=_TOP_N)
+
+    # Collect all queries: original + any sub-queries from the expander
+    all_queries = [question] + sub_queries
+
+    # Build the list of coroutines to run concurrently:
+    #   - hybrid search (text + BM25) for each query variant
+    #   - HyDE vector search using the pre-computed hypothetical doc embedding
+    coros = [_hybrid_search(q) for q in all_queries]
+
+    async def _hyde_vector_search() -> list[dict]:
+        """Vector-only search using the HyDE hypothetical document embedding."""
+        try:
+            return await vector_store.query_by_embedding(hyde_embedding, n_results=_TOP_N)
+        except Exception as exc:
+            logger.warning("Retriever: HyDE vector search failed — %s", exc)
+            return []
+
+    if hyde_embedding:
+        coros.append(_hyde_vector_search())
+
+    per_query_results: list[list[dict]] = await asyncio.gather(*coros)
+
+    # Merge all result lists iteratively via RRF
+    merged: list[dict] = per_query_results[0]
+    for extra_list in per_query_results[1:]:
+        merged = _rrf_merge(merged, extra_list, k=_RRF_K, top_n=_TOP_N)
 
     logger.info(
-        "Retriever: vector=%d bm25=%d merged=%d",
-        len(vector_chunks),
-        len(bm25_chunks),
+        "Retriever: queries=%d hyde=%s merged=%d",
+        len(all_queries),
+        bool(hyde_embedding),
         len(merged),
     )
 

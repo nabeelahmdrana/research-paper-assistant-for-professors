@@ -21,10 +21,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Common English stopwords — hardcoded to avoid adding nltk as a dependency.
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "of", "in", "to", "for",
+    "on", "at", "by", "with", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "out", "off", "over",
+    "under", "and", "but", "or", "nor", "so", "yet", "both", "either",
+    "neither", "not", "only", "own", "same", "than", "too", "very",
+    "just", "this", "that", "these", "those", "it", "its",
+})
+
 
 def _tokenize(text: str) -> list[str]:
-    """Simple whitespace + lowercase tokenizer."""
-    return text.lower().split()
+    """Lowercase whitespace tokenizer with English stopword removal."""
+    return [w for w in text.lower().split() if w not in _STOPWORDS]
 
 
 class BM25Index:

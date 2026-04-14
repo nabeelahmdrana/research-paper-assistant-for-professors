@@ -23,15 +23,23 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import AsyncGenerator, Literal
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents.analysis_agent import analysis_agent
+from app.agents.analysis_agent import analysis_agent, stream_analysis
+from app.agents.cache_checker import cache_checker
+from app.agents.confidence_evaluator import confidence_evaluator
+from app.agents.external_search_agent import external_search_agent
 from app.agents.process_agent import process_agent
+from app.agents.query_expander import query_expander
+from app.agents.query_processor import query_processor
+from app.agents.reranker_agent import reranker_agent
+from app.agents.retriever import retriever
 from app.agents.storage_agent import storage_agent
-from app.agents.supervisor import run_research_pipeline
+from app.agents.supervisor import ResearchState, run_research_pipeline
 from app.config import settings
 from app.models.schemas import ConfirmSelectionRequest
 
@@ -169,7 +177,6 @@ async def run_research(body: ResearchQueryRequest) -> dict:
 
     confidence: float = result.get("confidenceScore", 0.0)
     cache_hit: bool = result.get("cacheHit", False)
-
     external_papers: list[dict] = result.get("external_papers", [])
     local_sufficient: bool = result.get("local_sufficient", True)
 
@@ -187,51 +194,185 @@ async def run_research(body: ResearchQueryRequest) -> dict:
         confidence=confidence,
     )
 
-    # ------------------------------------------------------------------
-    # Two-step flow: if external candidates exist and we are not forcing
-    # local-only mode, park the state and ask the frontend to confirm.
-    # ------------------------------------------------------------------
-    if (
-        external_papers
-        and not local_sufficient
-        and body.mode != "local"
-    ):
-        result_id = str(uuid.uuid4())
-
-        # Store the pipeline result state for the /confirm step.
-        # We carry the external_papers list and current pipeline state
-        # so process_agent can ingest the user-selected subset.
-        _pending_states[result_id] = {
-            "question": body.question,
-            "external_papers": external_papers,
-            "pipeline_result": result,
-        }
-
-        return {
-            "data": {
-                "status": "needs_external_selection",
-                "result_id": result_id,
-                "external_papers": external_papers,
-                "confidence_score": confidence,
-                "message": (
-                    "Local knowledge base has insufficient coverage "
-                    "(confidence={:.2f}). Select papers to ingest and confirm.".format(
-                        confidence
-                    )
-                ),
-            },
-            "error": None,
-            "status": 200,
-        }
-
-    # ------------------------------------------------------------------
-    # Normal path: return the final analysis directly
-    # ------------------------------------------------------------------
-    # Persist result
+    # The pipeline always produces a complete analysis (external_search now
+    # feeds directly into analysis_agent). Persist and return immediately.
     _results_store[result["id"]] = result
     _save_results(_results_store)
 
     return {"data": result, "error": None, "status": 200}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/stream  — SSE streaming endpoint
+# ---------------------------------------------------------------------------
+
+
+def _sse_event(data: dict) -> str:
+    """Format a dict as a single SSE data frame."""
+    return f"data: {json.dumps(data)}\n\n"
+
+
+async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
+    """Run the research pipeline and emit SSE events at each stage.
+
+    Each agent is called directly and in sequence so we have full control
+    over when events are emitted.  The analysis step uses stream_analysis()
+    to forward individual LLM token deltas to the browser as they arrive,
+    giving word-by-word output like ChatGPT/Gemini.
+
+    SSE event types:
+        {"stage": "<name>"}                 — pipeline stage milestone
+        {"stage": "token", "token": "..."}  — one LLM text delta
+        {"stage": "complete", "data": ...}  — final result payload
+        {"stage": "error", "error": "..."}  — fatal error
+    """
+    state: ResearchState = {
+        "question": question,
+        "error": None,
+        "normalized_query": "",
+        "query_embedding": [],
+        "hyde_embedding": [],
+        "cache_hit": False,
+        "cached_answer": {},
+        "retrieved_chunks": [],
+        "reranked_chunks": [],
+        "confidence_score": 0.0,
+        "answer_stored": False,
+        "sub_queries": [],
+        "local_results": [],
+        "local_sufficient": False,
+        "external_papers": [],
+        "sources_origin": [],
+        "chunks_stored": False,
+        "analysis": {},
+    }
+
+    try:
+        # --- Query processing ---
+        state = await query_processor(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "processing_query"})
+
+        state = await query_expander(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "expanding_query"})
+
+        state = await cache_checker(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "checking_cache"})
+
+        # --- Cache hit: return immediately without running retrieval/LLM ---
+        if state.get("cache_hit", False):
+            cached = state.get("cached_answer", {})
+            result = {
+                "id": str(uuid.uuid4()),
+                "question": question,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "summary": cached.get("summary", ""),
+                "agreements": cached.get("agreements", []),
+                "contradictions": cached.get("contradictions", []),
+                "researchGaps": cached.get("researchGaps", []),
+                "citations": cached.get("citations", []),
+                "externalPapersFetched": False,
+                "newPapersCount": 0,
+                "confidenceScore": state.get("confidence_score", 0.0),
+                "cacheHit": True,
+                "query_embedding": state.get("query_embedding", []),
+            }
+            _results_store[result["id"]] = result
+            _save_results(_results_store)
+            _record_query(cache_hit=True, external_used=False, confidence=result["confidenceScore"])
+            yield _sse_event({"stage": "complete", "data": result})
+            return
+
+        # --- Retrieval + reranking ---
+        state = await retriever(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "retrieving"})
+
+        state = await reranker_agent(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "reranking"})
+
+        state = await confidence_evaluator(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "evaluating"})
+
+        # --- External search when local coverage is insufficient ---
+        if not state.get("local_sufficient", False):
+            state = await external_search_agent(state)  # type: ignore[assignment]
+            yield _sse_event({"stage": "searching_external"})
+
+        # --- Streaming analysis — tokens forwarded to browser in real time ---
+        yield _sse_event({"stage": "analyzing"})
+        async for event_type, event_data in stream_analysis(state):
+            if event_type == "token":
+                yield _sse_event({"stage": "token", "token": event_data})
+            elif event_type == "done":
+                state = event_data  # type: ignore[assignment]
+
+        # --- Persist answer to cache ---
+        state = await storage_agent(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "storing"})
+
+    except Exception as exc:
+        logger.error("SSE stream: pipeline error — %s", exc)
+        yield _sse_event({"stage": "error", "error": str(exc)})
+        return
+
+    # --- Assemble and emit final result ---
+    external_papers = state.get("external_papers", [])
+    analysis = state.get("analysis", {})
+    result = {
+        "id": str(uuid.uuid4()),
+        "question": question,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "summary": analysis.get("summary", ""),
+        "agreements": analysis.get("agreements", []),
+        "contradictions": analysis.get("contradictions", []),
+        "researchGaps": analysis.get("researchGaps", []),
+        "citations": analysis.get("citations", []),
+        "externalPapersFetched": not state.get("local_sufficient", True) and len(external_papers) > 0,
+        "newPapersCount": len([p for p in external_papers if p.get("abstract")]),
+        "confidenceScore": state.get("confidence_score", 0.0),
+        "cacheHit": False,
+        "query_embedding": state.get("query_embedding", []),
+        "external_papers": external_papers,
+        "local_sufficient": state.get("local_sufficient", True),
+    }
+
+    _results_store[result["id"]] = result
+    _save_results(_results_store)
+    _record_query(
+        cache_hit=False,
+        external_used=not state.get("local_sufficient", True),
+        confidence=result["confidenceScore"],
+    )
+
+    yield _sse_event({"stage": "complete", "data": result})
+
+
+@router.post("/research/stream")
+async def stream_research(body: ResearchQueryRequest) -> StreamingResponse:
+    """Run a research query and stream progress events via Server-Sent Events.
+
+    The existing POST /api/research endpoint is unchanged (backward compatible).
+    This endpoint emits one SSE event per pipeline stage so the frontend can
+    update progress indicators in real time.
+
+    SSE event format:
+        data: {"stage": "<stage_name>"}\n\n
+        ...
+        data: {"stage": "complete", "data": <result_json>}\n\n
+
+    Stage names: processing_query, expanding_query, checking_cache, retrieving,
+                 reranking, evaluating, analyzing, searching_external, storing, complete
+    """
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    return StreamingResponse(
+        _stream_research_pipeline(body.question),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +417,19 @@ async def confirm_research(body: ConfirmSelectionRequest) -> dict:
     # Re-compute if the original run didn't pass it through
     if not query_embedding:
         try:
-            from app.agents.query_processor import _get_model  # noqa: PLC0415
-            model = _get_model()
-            query_embedding = model.encode(question.strip().lower()).tolist()
-            logger.info("confirm_research: re-computed query_embedding for caching")
+            from openai import AsyncOpenAI  # noqa: PLC0415
+            from app.config import settings as _settings  # noqa: PLC0415
+
+            _client = AsyncOpenAI(
+                api_key=_settings.openai_api_key,
+                base_url=_settings.openai_base_url,
+            )
+            resp = await _client.embeddings.create(
+                model=_settings.embedding_model,
+                input=question.strip().lower(),
+            )
+            query_embedding = resp.data[0].embedding
+            logger.info("confirm_research: re-computed query_embedding via OpenAI API")
         except Exception as exc:
             logger.warning("confirm_research: could not compute embedding — %s", exc)
 

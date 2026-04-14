@@ -19,7 +19,7 @@ from app.tools.reranker import reranker
 
 logger = logging.getLogger(__name__)
 
-_RERANK_TOP_K = 12
+_RERANK_TOP_K = 20
 
 
 async def reranker_agent(state: dict) -> dict:

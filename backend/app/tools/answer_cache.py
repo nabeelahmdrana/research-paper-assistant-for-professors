@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
@@ -142,6 +142,20 @@ class AnswerCache:
         metadatas = results["metadatas"][0]
         if not metadatas:
             return None
+
+        # TTL check — treat entries older than 30 days as a miss
+        stored_at_str = metadatas[0].get("stored_at", "")
+        if stored_at_str:
+            try:
+                stored_at = datetime.fromisoformat(stored_at_str)
+                if datetime.now(timezone.utc) - stored_at > timedelta(days=30):
+                    logger.info(
+                        "AnswerCache.lookup: entry expired (stored_at=%s) — miss",
+                        stored_at_str,
+                    )
+                    return None
+            except (ValueError, TypeError):
+                pass  # malformed date — proceed
 
         raw_json = metadatas[0].get("answer_json", "")
         if not raw_json:

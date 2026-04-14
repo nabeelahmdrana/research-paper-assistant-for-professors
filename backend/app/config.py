@@ -15,11 +15,12 @@ class Settings(BaseSettings):
     chroma_collection_name: str = "research_papers"
 
     # Retrieval settings
-    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model: str = "text-embedding-3-small"
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     relevance_threshold: float = 0.7
     min_relevant_chunks: int = 5
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
+    chunk_size: int = 512
+    chunk_overlap: int = 64
 
     # Upload / storage
     upload_dir: str = "./uploads"
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
     results_store_path: str = "./research_results.json"
 
     # Answer cache
-    answer_cache_similarity_threshold: float = 0.93
+    answer_cache_similarity_threshold: float = 0.90
 
 
 settings = Settings()

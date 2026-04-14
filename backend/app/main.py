@@ -20,6 +20,33 @@ async def lifespan(app: FastAPI):
         logger.info("Embedding model and ChromaDB ready.")
     except Exception as exc:
         logger.warning("Startup pre-warm failed (non-fatal): %s", exc)
+
+    # Prune expired answer-cache entries (older than 30 days) on startup
+    try:
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+        answers_col = vector_store.get_answers_collection()
+        if answers_col.count() > 0:
+            all_entries = answers_col.get(include=["metadatas"])
+            ids = all_entries.get("ids") or []
+            metadatas_list = all_entries.get("metadatas") or []
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            expired_ids: list[str] = []
+            for entry_id, meta in zip(ids, metadatas_list):
+                stored_at_str = meta.get("stored_at", "")
+                if stored_at_str:
+                    try:
+                        stored_at = datetime.fromisoformat(stored_at_str)
+                        if stored_at < cutoff:
+                            expired_ids.append(entry_id)
+                    except (ValueError, TypeError):
+                        pass
+            if expired_ids:
+                answers_col.delete(ids=expired_ids)
+                logger.info("Startup: pruned %d expired cache entries", len(expired_ids))
+    except Exception as exc:
+        logger.warning("Startup: cache pruning failed (non-fatal): %s", exc)
+
     yield
 
 

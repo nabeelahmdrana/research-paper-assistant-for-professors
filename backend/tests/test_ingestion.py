@@ -4,9 +4,9 @@
 import os
 import shutil
 import tempfile
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pypdf import PdfWriter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -21,10 +21,46 @@ def test_chroma_dir():
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _make_mock_embedding_fn():
+    """Return a ChromaDB-compatible callable that produces deterministic 1536-d vectors.
+
+    ChromaDB validates that the embedding function's __call__ has the exact
+    signature (self, input: Documents) -> Embeddings.  A plain MagicMock fails
+    that check, so we use a real class here.
+    """
+    class _StubEmbedFn:
+        def _vecs(self, texts: list[str]) -> list[list[float]]:
+            return [[float(hash(t) % 1000) / 1000.0] + [0.0] * 1535 for t in texts]
+
+        def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+            return self._vecs(input)
+
+        # ChromaDB >= 0.5 uses embed_query() for search and embed_documents()
+        # for indexing.  Both delegate to the same deterministic stub.
+        def embed_query(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+            return self._vecs(input)
+
+        def embed_documents(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+            return self._vecs(input)
+
+        # ChromaDB >= 0.5 calls name() during conflict validation.
+        # Returning "default" bypasses the conflict check entirely.
+        def name(self) -> str:
+            return "default"
+
+        @property
+        def is_legacy(self) -> bool:
+            return False
+
+    return _StubEmbedFn()
+
+
 @pytest.fixture(scope="module")
 def patch_settings(test_chroma_dir):
-    """Override settings so tests use the isolated ChromaDB path."""
+    """Override settings so tests use an isolated ChromaDB path and a stub
+    embedding function that avoids real OpenAI API calls."""
     import app.config as config_module
+    import app.tools.vector_store as vs_module
 
     original_path = config_module.settings.chroma_db_path
     original_collection = config_module.settings.chroma_collection_name
@@ -32,50 +68,52 @@ def patch_settings(test_chroma_dir):
     config_module.settings.chroma_db_path = test_chroma_dir
     config_module.settings.chroma_collection_name = "test_papers"
 
-    yield config_module.settings
+    # Reset the module-level collection singletons so they re-initialize with
+    # the new path and our stub embedding function.
+    vs_module._client = None
+    vs_module._embedding_fn = None
+    vs_module._chunks_collection = None
+    vs_module._papers_meta_collection = None
+    vs_module._answers_collection = None
 
+    mock_embed_fn = _make_mock_embedding_fn()
+
+    with patch("app.tools.vector_store._get_embedding_fn", return_value=mock_embed_fn):
+        yield config_module.settings
+
+    # Restore settings and reset singletons
     config_module.settings.chroma_db_path = original_path
     config_module.settings.chroma_collection_name = original_collection
+    vs_module._client = None
+    vs_module._embedding_fn = None
+    vs_module._chunks_collection = None
+    vs_module._papers_meta_collection = None
+    vs_module._answers_collection = None
 
 
 @pytest.fixture(scope="module")
 def sample_pdf_path():
-    """Create a minimal in-memory PDF and write it to a temp file."""
-    writer = PdfWriter()
-    page = writer.add_blank_page(width=612, height=792)
+    """Create a minimal PDF with readable text using pymupdf (fitz)."""
+    import fitz
 
-    # pypdf does not provide a simple 'add text' API at this level;
-    # we write raw PDF content stream to add readable text to the page.
-    content_stream = (
-        b"BT\n"
-        b"/F1 12 Tf\n"
-        b"72 720 Td\n"
-        b"(Attention Is All You Need) Tj\n"
-        b"0 -20 Td\n"
-        b"(Authors: Vaswani et al.) Tj\n"
-        b"0 -20 Td\n"
-        b"(Abstract: The transformer architecture uses self-attention mechanisms.) Tj\n"
-        b"0 -20 Td\n"
-        b"(It replaces recurrent and convolutional layers entirely.) Tj\n"
-        b"0 -20 Td\n"
-        b"(This allows for much greater parallelization during training.) Tj\n"
-        b"ET\n"
-    )
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    lines = [
+        "Attention Is All You Need",
+        "Authors: Vaswani et al.",
+        "Abstract: The transformer architecture uses self-attention mechanisms.",
+        "It replaces recurrent and convolutional layers entirely.",
+        "This allows for much greater parallelization during training.",
+    ]
+    y = 720
+    for line in lines:
+        page.insert_text((72, y), line, fontsize=12)
+        y -= 20
 
-    # Add font resource and content stream directly via compress_content_streams
-    from pypdf.generic import (
-        DecodedStreamObject,
-    )
-
-    # Embed text as a raw content stream on the page object
-    stream_obj = DecodedStreamObject()
-    stream_obj.set_data(content_stream)
-    page.replace_contents(stream_obj)
-
-    # Write to a temp file
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    writer.write(tmp)
     tmp.close()
+    doc.save(tmp.name)
+    doc.close()
 
     yield tmp.name
 
