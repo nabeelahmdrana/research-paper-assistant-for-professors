@@ -182,33 +182,37 @@ async def search_external_papers(
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    ss_papers, arxiv_papers = await asyncio.gather(
-        _call_mcp_tool("search_papers", {"query": q, "limit": limit}),
-        _call_mcp_tool("search_arxiv_papers", {"query": q, "limit": limit}),
+    query_args = {"query": q, "max_results": limit}
+    arxiv_papers, pubmed_papers = await asyncio.gather(
+        _call_mcp_tool("search_arxiv", query_args),
+        _call_mcp_tool("search_pubmed", query_args),
     )
+
+    def _parse_year(published_date: str) -> str:
+        if published_date and len(published_date) >= 4:
+            candidate = published_date[:4]
+            if candidate.isdigit():
+                return candidate
+        return str(published_date) if published_date else ""
+
+    def _parse_authors(authors_raw) -> list[str]:
+        if isinstance(authors_raw, list):
+            return [str(a).strip() for a in authors_raw if str(a).strip()]
+        if isinstance(authors_raw, str):
+            return [a.strip() for a in authors_raw.split(";") if a.strip()]
+        return []
 
     # Normalise to unified structure
     combined: list[dict] = []
-    for paper in ss_papers:
+    for paper in arxiv_papers + pubmed_papers:
         combined.append({
-            "paper_id": paper.get("paperId") or "",
-            "title": paper.get("title", ""),
-            "authors": paper.get("authors", []),
-            "year": paper.get("year", ""),
-            "abstract": paper.get("abstract", ""),
-            "doi": paper.get("doi", ""),
-            "url": paper.get("url", ""),
-            "source": "external",
-        })
-    for paper in arxiv_papers:
-        combined.append({
-            "paper_id": paper.get("arxiv_id") or "",
-            "title": paper.get("title", ""),
-            "authors": paper.get("authors", []),
-            "year": paper.get("year", ""),
-            "abstract": paper.get("abstract", ""),
-            "doi": paper.get("doi", ""),
-            "url": paper.get("url", ""),
+            "paper_id": (paper.get("paper_id") or "").strip(),
+            "title": (paper.get("title") or "").strip(),
+            "authors": _parse_authors(paper.get("authors", "")),
+            "year": _parse_year(paper.get("published_date", "") or str(paper.get("year", ""))),
+            "abstract": (paper.get("abstract") or "").strip(),
+            "doi": (paper.get("doi") or "").strip(),
+            "url": (paper.get("url") or paper.get("pdf_url") or "").strip(),
             "source": "external",
         })
 
@@ -274,6 +278,7 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
             "source": "external",
             "doi": paper.get("doi", "") or "",
             "url": paper.get("url", "") or "",
+            "abstract": abstract,
             "date_added": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -328,6 +333,7 @@ async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
         "source": "external",
         "doi": body.doi or "",
         "url": body.url or "",
+        "abstract": abstract,
         "date_added": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -351,12 +357,23 @@ async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
 async def get_paper(paper_id: str) -> dict:
     """Fetch a single paper by paper_id from ChromaDB."""
     collection = vector_store.get_collection()
-    results = collection.get(where={"paper_id": paper_id})
+    results = collection.get(
+        where={"paper_id": paper_id},
+        include=["metadatas", "documents"],
+    )
     metadatas = results.get("metadatas") or []
     if not metadatas:
         raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found")
 
-    paper = _build_paper_response(metadatas[0])
+    meta = metadatas[0]
+
+    # If abstract is missing from metadata, reconstruct from chunk documents
+    if not meta.get("abstract"):
+        documents = results.get("documents") or []
+        if documents:
+            meta["abstract"] = " ".join(documents)
+
+    paper = _build_paper_response(meta)
     return {"data": paper, "error": None, "status": 200}
 
 

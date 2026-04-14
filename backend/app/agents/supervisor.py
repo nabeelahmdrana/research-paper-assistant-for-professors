@@ -199,6 +199,8 @@ async def run_research_pipeline(question: str) -> dict:
 
     final_state: ResearchState = await _compiled_graph.ainvoke(initial_state)
 
+    query_embedding = final_state.get("query_embedding", [])
+
     # --- Cache hit path: return cached answer directly with metadata ---
     if final_state.get("cache_hit", False):
         cached = final_state.get("cached_answer", {})
@@ -215,6 +217,7 @@ async def run_research_pipeline(question: str) -> dict:
             "newPapersCount": 0,
             "confidenceScore": final_state.get("confidence_score", 0.0),
             "cacheHit": True,
+            "query_embedding": query_embedding,
         }
 
     # --- Normal path: assemble from analysis ---
@@ -239,6 +242,7 @@ async def run_research_pipeline(question: str) -> dict:
         "newPapersCount": new_papers_count,
         "confidenceScore": final_state.get("confidence_score", 0.0),
         "cacheHit": False,
+        "query_embedding": query_embedding,
         # Phase C: pass through so the API layer can offer two-step selection
         "external_papers": external_papers,
         "local_sufficient": final_state.get("local_sufficient", True),

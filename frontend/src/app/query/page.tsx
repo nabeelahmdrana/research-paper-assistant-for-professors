@@ -1,20 +1,23 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, CheckCircle, Circle, ExternalLink, BookPlus, ArrowLeft } from "lucide-react";
+import { Search, CheckCircle, Circle, ExternalLink, BookPlus, ArrowLeft, Clock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { ExternalPaperCard } from "@/components/ExternalPaperCard";
+import { SkeletonRow } from "@/components/SkeletonRow";
 import type { QueryResult, ExternalPaper } from "@/lib/types";
-import { runQuery, confirmExternalPapers } from "@/lib/api";
+import { runQuery, confirmExternalPapers, listQueryResults } from "@/lib/api";
 
 type LoadingStep = "idle" | "active" | "done" | "error";
 
@@ -42,6 +45,20 @@ export default function QueryPage() {
   const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
   const [isConfirming, setIsConfirming] = useState(false);
 
+  const [pastQueries, setPastQueries] = useState<QueryResult[]>([]);
+  const [pastQueriesLoading, setPastQueriesLoading] = useState(true);
+
+  const loadPastQueries = () => {
+    listQueryResults().then((r) => {
+      if (r.data) setPastQueries(r.data.results);
+      setPastQueriesLoading(false);
+    });
+  };
+
+  useEffect(() => {
+    loadPastQueries();
+  }, []);
+
   const handleSearch = async () => {
     if (!question.trim()) return;
     setIsLoading(true);
@@ -64,6 +81,7 @@ export default function QueryPage() {
       } else {
         setSteps({ local: "done", external: "done", generating: "done" });
         setResult(response.data);
+        loadPastQueries();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to connect to the research pipeline.");
@@ -88,6 +106,7 @@ export default function QueryPage() {
       setResult(finalResult);
       setStep("query");
       setExternalCandidates([]);
+      loadPastQueries();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process selected papers.");
       setSteps({ local: "done", external: "done", generating: "error" });
@@ -403,13 +422,78 @@ export default function QueryPage() {
         </Card>
       )}
 
-      {/* Empty State */}
-      {!result && !isLoading && !error && step === "query" && (
+      {/* Empty State — only when no past queries either */}
+      {!result && !isLoading && !error && step === "query" && pastQueries.length === 0 && !pastQueriesLoading && (
         <EmptyState
           icon={<Search className="w-16 h-16" />}
           title="Ask a research question"
           description="Type your question above and click Search Papers. Your results will appear here."
         />
+      )}
+
+      {/* Past Queries List */}
+      {step === "query" && !isLoading && !isConfirming && (
+        <Card>
+          <CardContent className="p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              Past Queries
+            </h2>
+            {pastQueriesLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <SkeletonRow key={i} />
+                ))}
+              </div>
+            ) : pastQueries.length === 0 ? (
+              <p className="text-sm text-gray-500 py-3">
+                No queries yet. Ask your first research question above.
+              </p>
+            ) : (
+              <div className="space-y-0">
+                {pastQueries.map((q, idx) => (
+                  <div key={q.id}>
+                    <div className="flex items-start justify-between py-3 group">
+                      <div className="flex-1 min-w-0 pr-4">
+                        <p className="text-sm font-medium text-gray-800">
+                          {q.question}
+                        </p>
+                        <div className="flex items-center gap-3 mt-1">
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(q.createdAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                          {q.citations.length > 0 && (
+                            <span className="text-xs text-gray-500">
+                              {q.citations.length} citation{q.citations.length !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                          {q.externalPapersFetched && (
+                            <span className="text-xs text-blue-600 font-medium">
+                              + external
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Link
+                        href={`/results/${q.id}`}
+                        className="text-xs text-blue-600 hover:underline whitespace-nowrap shrink-0 mt-1"
+                      >
+                        View &rarr;
+                      </Link>
+                    </div>
+                    {idx < pastQueries.length - 1 && <Separator />}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

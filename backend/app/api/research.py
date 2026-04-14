@@ -19,6 +19,7 @@ Results are persisted to a JSON file so they survive server restarts.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,8 @@ from app.agents.storage_agent import storage_agent
 from app.agents.supervisor import run_research_pipeline
 from app.config import settings
 from app.models.schemas import ConfirmSelectionRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -167,12 +170,17 @@ async def run_research(body: ResearchQueryRequest) -> dict:
     confidence: float = result.get("confidenceScore", 0.0)
     cache_hit: bool = result.get("cacheHit", False)
 
-    # Determine whether the pipeline found external papers but didn't ingest them
-    # The supervisor returns external_papers in the result when local_sufficient=False.
     external_papers: list[dict] = result.get("external_papers", [])
     local_sufficient: bool = result.get("local_sufficient", True)
 
-    # Update in-memory stats
+    if cache_hit:
+        logger.info("POST /research: CACHE HIT for '%s…' — returning instantly", body.question[:60])
+    else:
+        logger.info(
+            "POST /research: cache MISS — confidence=%.2f local_sufficient=%s external=%d",
+            confidence, local_sufficient, len(external_papers),
+        )
+
     _record_query(
         cache_hit=cache_hit,
         external_used=bool(external_papers) and not local_sufficient,
@@ -262,21 +270,33 @@ async def confirm_research(body: ConfirmSelectionRequest) -> dict:
         # Empty selection — proceed with no external papers
         selected = []
 
+    # Recover query_embedding from the original pipeline run
+    query_embedding: list[float] = pending.get("pipeline_result", {}).get("query_embedding", [])
+
+    # Re-compute if the original run didn't pass it through
+    if not query_embedding:
+        try:
+            from app.agents.query_processor import _get_model  # noqa: PLC0415
+            model = _get_model()
+            query_embedding = model.encode(question.strip().lower()).tolist()
+            logger.info("confirm_research: re-computed query_embedding for caching")
+        except Exception as exc:
+            logger.warning("confirm_research: could not compute embedding — %s", exc)
+
     # Build a minimal pipeline state for process_agent → analysis_agent → storage_agent
     pipeline_state: dict = {
         "question": question,
         "external_papers": selected,
         "chunks_stored": False,
         "analysis": {},
-        # Carry over any existing state fields from the original pipeline run
         "reranked_chunks": [],
         "retrieved_chunks": [],
-        "query_embedding": pending.get("pipeline_result", {}).get("query_embedding", []),
+        "query_embedding": query_embedding,
         "confidence_score": pending.get("pipeline_result", {}).get("confidenceScore", 0.0),
         "local_sufficient": False,
         "local_results": [],
         "sources_origin": [],
-        "normalized_query": question,
+        "normalized_query": question.strip().lower(),
         "cache_hit": False,
         "cached_answer": {},
         "answer_stored": False,

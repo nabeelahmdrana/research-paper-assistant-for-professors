@@ -257,15 +257,24 @@ async def list_papers() -> list[dict]:
     if collection.count() == 0:
         return []
 
-    all_docs = collection.get()
+    all_docs = collection.get(include=["metadatas", "documents"])
     seen_paper_ids: set[str] = set()
+    paper_chunks: dict[str, list[str]] = {}
     papers: list[dict] = []
 
     metadatas = all_docs.get("metadatas") or []
-    for meta in metadatas:
+    documents = all_docs.get("documents") or []
+
+    for i, meta in enumerate(metadatas):
         paper_id = meta.get("paper_id", "")
-        if paper_id and paper_id not in seen_paper_ids:
+        if not paper_id:
+            continue
+
+        doc_text = documents[i] if i < len(documents) else ""
+
+        if paper_id not in seen_paper_ids:
             seen_paper_ids.add(paper_id)
+            paper_chunks[paper_id] = []
             papers.append(
                 {
                     "paper_id": paper_id,
@@ -279,6 +288,16 @@ async def list_papers() -> list[dict]:
                     "date_added": meta.get("date_added", ""),
                 }
             )
+
+        if doc_text:
+            paper_chunks[paper_id].append(doc_text)
+
+    # Fill in missing abstracts from chunk document text
+    for paper in papers:
+        if not paper["abstract"] and paper["paper_id"] in paper_chunks:
+            chunks = paper_chunks[paper["paper_id"]]
+            if chunks:
+                paper["abstract"] = chunks[0]
 
     return papers
 

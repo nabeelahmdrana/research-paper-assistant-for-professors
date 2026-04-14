@@ -87,11 +87,12 @@ async def ingest_by_doi_or_url(doi_or_url: str) -> dict:
 
     # Try to fetch metadata from Semantic Scholar
     ss_url = f"https://api.semanticscholar.org/graph/v1/paper/{doi or url}"
-    ss_fields = "title,authors,year,externalIds"
+    ss_fields = "title,authors,year,abstract,externalIds"
 
     title = ""
     authors = ""
     year = ""
+    abstract = ""
     paper_id = str(uuid.uuid4())
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -103,6 +104,7 @@ async def ingest_by_doi_or_url(doi_or_url: str) -> dict:
                 author_list = [a.get("name", "") for a in ss_data.get("authors", [])]
                 authors = ", ".join(author_list)
                 year = str(ss_data.get("year", ""))
+                abstract = ss_data.get("abstract", "") or ""
                 paper_id = ss_data.get("paperId", paper_id)
         except httpx.HTTPError:
             pass
@@ -114,6 +116,7 @@ async def ingest_by_doi_or_url(doi_or_url: str) -> dict:
         "year": year,
         "source": "external",
         "doi": doi,
+        "abstract": abstract,
         "date_added": datetime.now(timezone.utc).isoformat(),
     }
 

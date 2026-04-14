@@ -147,6 +147,14 @@ export default function DashboardPage() {
                 <p className="text-sm text-gray-500 py-3">No recent queries.</p>
               )}
             </div>
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <Link
+                href="/query"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                View all queries &rarr;
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
