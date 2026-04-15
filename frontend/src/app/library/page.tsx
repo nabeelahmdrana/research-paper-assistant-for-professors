@@ -55,8 +55,8 @@ export default function LibraryPage() {
     });
   }, []);
 
-  /** Papers stored in Chroma (upload, DOI/URL ingest, import). ``external`` is legacy metadata only. */
-  const LIBRARY_SOURCES = new Set(["pdf", "doi", "arxiv", "local"]);
+  const LIBRARY_SOURCES = new Set(["pdf", "local"]);
+  const EXTERNAL_SOURCES = new Set(["external", "doi", "arxiv"]);
 
   const filteredPapers = useMemo(() => {
     return papers.filter((p) => {
@@ -69,7 +69,7 @@ export default function LibraryPage() {
       const matchesSource =
         sourceFilter === "all" ||
         (sourceFilter === "local" && LIBRARY_SOURCES.has(p.source)) ||
-        (sourceFilter === "external" && p.source === "external");
+        (sourceFilter === "external" && EXTERNAL_SOURCES.has(p.source));
       const matchesYearFrom = !yearFrom || p.year >= parseInt(yearFrom);
       const matchesYearTo = !yearTo || p.year <= parseInt(yearTo);
       return matchesSearch && matchesSource && matchesYearFrom && matchesYearTo;
@@ -118,7 +118,10 @@ export default function LibraryPage() {
       return next;
     });
     setDeleteTarget(null);
-    toast({ title: "Paper deleted", description: `"${deleteTarget.title}" was removed.` });
+    toast({
+      title: "Paper deleted",
+      description: `"${deleteTarget.title}" was removed. Past query results citing this paper have been cleared.`,
+    });
   };
 
   const handleBulkDelete = async () => {
@@ -171,7 +174,7 @@ export default function LibraryPage() {
           <SelectContent>
             <SelectItem value="all">All sources</SelectItem>
             <SelectItem value="local">Library</SelectItem>
-            <SelectItem value="external">Legacy &quot;External&quot; tag</SelectItem>
+            <SelectItem value="external">External</SelectItem>
           </SelectContent>
         </Select>
 

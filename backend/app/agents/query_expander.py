@@ -17,9 +17,8 @@ from __future__ import annotations
 import json
 import logging
 
-from openai import AsyncOpenAI
-
 from app.config import settings
+from app.tools.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +47,7 @@ async def query_expander(state: dict) -> dict:
     if not question:
         return {**state, "sub_queries": []}
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    client = get_openai_client()
 
     sub_queries: list[str] = []
     try:

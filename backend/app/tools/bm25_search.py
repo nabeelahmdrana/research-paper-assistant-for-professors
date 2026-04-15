@@ -104,6 +104,31 @@ class BM25Index:
 
         return results
 
+    def add_chunks(self, new_chunks: list[dict]) -> None:
+        """Incrementally add new chunks and rebuild the index in-memory.
+
+        Unlike ``build_index()``, this does NOT fetch all chunks from ChromaDB.
+        It appends the already-available ``new_chunks`` to ``self._chunks`` and
+        rebuilds ``BM25Okapi`` from the combined in-memory list.  This eliminates
+        the O(n) ChromaDB scan that ``build_index()`` performs on every ingestion.
+
+        The cold-start full rebuild path in the retriever (``build_index()``)
+        is preserved and remains the correct path after a server restart.
+
+        Args:
+            new_chunks: List of chunk dicts (id, text, metadata) just ingested.
+        """
+        if not new_chunks:
+            return
+        self._chunks.extend(new_chunks)
+        tokenized_corpus = [_tokenize(c["text"]) for c in self._chunks]
+        self._index = BM25Okapi(tokenized_corpus)
+        logger.info(
+            "BM25: incremental update — added %d chunks, total=%d",
+            len(new_chunks),
+            len(self._chunks),
+        )
+
     def reset(self) -> None:
         """Clear the in-memory index (called when ChromaDB is wiped)."""
         self._index = None

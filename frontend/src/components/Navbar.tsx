@@ -22,9 +22,14 @@ export function Navbar() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("checking");
 
   useEffect(() => {
-    checkHealth()
-      .then((h) => setConnectionStatus(h.status === "ok" ? "connected" : "disconnected"))
-      .catch(() => setConnectionStatus("disconnected"));
+    const poll = () => {
+      checkHealth()
+        .then((h) => setConnectionStatus(h.status === "ok" ? "connected" : "disconnected"))
+        .catch(() => setConnectionStatus("disconnected"));
+    };
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   const statusDot = {

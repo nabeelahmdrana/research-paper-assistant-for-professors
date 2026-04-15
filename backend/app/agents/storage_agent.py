@@ -61,8 +61,16 @@ async def storage_agent(state: dict) -> dict:
         logger.info("StorageAgent: skipping cache store — response indicates no relevant results")
         return {**state, "answer_stored": False}
 
+    # Collect paper_ids cited in this answer so the cache entry can be evicted
+    # when any of those papers is deleted from the library.
+    cited_paper_ids: list[str] = []
+    for citation in analysis.get("citations", []):
+        pid = citation.get("paper_id", "")
+        if pid and pid not in cited_paper_ids:
+            cited_paper_ids.append(pid)
+
     try:
-        await answer_cache.store(query_text, query_embedding, analysis)
+        await answer_cache.store(query_text, query_embedding, analysis, paper_ids=cited_paper_ids)
         logger.info("StorageAgent: answer cached for query '%s…'", query_text[:60])
         stored = True
     except Exception as exc:

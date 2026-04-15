@@ -116,7 +116,7 @@ export default function QueryPage() {
       setIsStreaming(false);
       setResult(finalResult);
       setIsLoading(false);
-      loadPastQueries();
+      setPastQueries((prev) => [finalResult, ...prev.filter((q) => q.id !== finalResult.id)]);
     };
 
     const handleStreamError = (err: Error) => {
@@ -131,7 +131,9 @@ export default function QueryPage() {
           } else {
             setSteps({ local: "done", external: "done", generating: "done", currentStageLabel: "" });
             setResult(response.data);
-            loadPastQueries();
+            if (response.data) {
+              setPastQueries((prev) => [response.data!, ...prev.filter((q) => q.id !== response.data!.id)]);
+            }
           }
         })
         .catch((fallbackErr: unknown) => {
@@ -178,7 +180,7 @@ export default function QueryPage() {
       setResult(finalResult);
       setStep("query");
       setExternalCandidates([]);
-      loadPastQueries();
+      setPastQueries((prev) => [finalResult, ...prev.filter((q) => q.id !== finalResult.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process selected papers.");
       setSteps({ local: "done", external: "done", generating: "error", currentStageLabel: "" });

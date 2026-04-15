@@ -158,7 +158,13 @@ _pending_states: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
-# Persistent result store backed by a JSON file
+# Persistent result store — JSONL append-only format (O(1) write per result)
+#
+# Each line is a JSON object: {"id": "...", ...full result...}
+# _load_results() reads all lines and builds an id→result dict.
+# _save_results(result) appends a single JSON line (not the full dict).
+# On startup, a compaction step rewrites the file with the deduped contents
+# so deleted / updated entries don't accumulate forever.
 # ---------------------------------------------------------------------------
 
 def _results_file() -> Path:
@@ -166,25 +172,143 @@ def _results_file() -> Path:
 
 
 def _load_results() -> dict[str, dict]:
+    """Read all JSONL lines and return an id→result dict.
+
+    Also handles the legacy flat-JSON format (migration path): if the file
+    starts with '{', it is parsed as a JSON object and rewritten as JSONL.
+    """
     f = _results_file()
-    if f.exists():
-        try:
-            return json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
+    if not f.exists():
+        # Also check legacy .json path during migration
+        legacy = f.with_suffix(".json")
+        if legacy.exists():
+            try:
+                data: dict[str, dict] = json.loads(legacy.read_text(encoding="utf-8"))
+                # Migrate to JSONL in-place
+                _compact_results(data, f)
+                logger.info("Migrated results from %s to %s", legacy, f)
+                return data
+            except Exception:
+                pass
+        return {}
+
+    try:
+        raw = f.read_text(encoding="utf-8").strip()
+        if not raw:
             return {}
-    return {}
+        # Legacy flat-JSON format detection
+        if raw.startswith("{"):
+            data = json.loads(raw)
+            _compact_results(data, f)
+            return data
+        # Normal JSONL — last entry wins for duplicate ids
+        results: dict[str, dict] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                rid = obj.get("id")
+                if rid:
+                    results[rid] = obj
+            except Exception:
+                pass
+        return results
+    except Exception:
+        return {}
+
+
+def _compact_results(results: dict[str, dict], path: Path) -> None:
+    """Rewrite the JSONL file with the current deduplicated results dict."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(v, default=str) for v in results.values()]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _save_results(results: dict[str, dict]) -> None:
+    """Append the most-recently-added result as a single JSONL line.
+
+    ``results`` is always ``_results_store``; we take the last-inserted entry
+    by iterating to the end.  This is O(1) I/O regardless of library size.
+    """
+    if not results:
+        return
+    # The caller always adds the new entry to _results_store before calling us,
+    # so the last value in insertion order is the one to append.
+    last_result = next(reversed(results.values()))
     f = _results_file()
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+    with f.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(last_result, default=str) + "\n")
 
 
 # Load existing results at module import so GET endpoints work immediately
 _results_store: dict[str, dict] = _load_results()
+# Compact on startup to remove any duplicate lines from previous runs
+if _results_store:
+    try:
+        _compact_results(_results_store, _results_file())
+    except Exception:
+        pass
 # Seed exact-match cache from persisted results
 _seed_exact_cache(_results_store)
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation — called when a paper is deleted so stale answers are
+# removed from both the in-memory exact-match cache and the ChromaDB semantic
+# answer cache.
+# ---------------------------------------------------------------------------
+
+def invalidate_cache_for_paper(paper_id: str) -> None:
+    """Remove cached answers that cite the given paper.
+
+    Scans ``_exact_query_cache`` for entries whose ``citations`` list contains
+    a paper matching ``paper_id``, and removes matching docs from the ChromaDB
+    ``answers`` collection (matched by the ``paper_ids`` metadata field written
+    by storage_agent).
+    """
+    from app.tools import vector_store  # avoid circular import at module level
+
+    # 1. Purge from in-memory exact-match cache
+    keys_to_delete = []
+    for key, result in _exact_query_cache.items():
+        citations = result.get("citations") or []
+        ids_in_result = {c.get("paper_id", "") for c in citations}
+        if paper_id in ids_in_result:
+            keys_to_delete.append(key)
+    for key in keys_to_delete:
+        del _exact_query_cache[key]
+
+    # 2. Purge from ChromaDB answers collection
+    try:
+        answers_col = vector_store.get_answers_collection()
+        if answers_col.count() > 0:
+            all_entries = answers_col.get(include=["metadatas"])
+            ids = all_entries.get("ids") or []
+            metadatas_list = all_entries.get("metadatas") or []
+            expired_ids = []
+            for entry_id, meta in zip(ids, metadatas_list):
+                paper_ids_str = meta.get("paper_ids", "")
+                if paper_id in paper_ids_str.split(","):
+                    expired_ids.append(entry_id)
+            if expired_ids:
+                answers_col.delete(ids=expired_ids)
+                logger.info(
+                    "invalidate_cache_for_paper: removed %d cached answers citing paper %s",
+                    len(expired_ids),
+                    paper_id,
+                )
+    except Exception as exc:
+        logger.warning("invalidate_cache_for_paper: answers collection cleanup failed: %s", exc)
+
+    if keys_to_delete:
+        logger.info(
+            "invalidate_cache_for_paper: evicted %d exact-cache entries citing paper %s",
+            len(keys_to_delete),
+            paper_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -608,13 +732,20 @@ async def get_research_result(result_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/research")
-async def list_research_results() -> dict:
-    """List all persisted research results (most recent first)."""
+async def list_research_results(limit: int | None = None) -> dict:
+    """List persisted research results (most recent first).
+
+    Args:
+        limit: Optional maximum number of results to return.  Omit for all.
+    """
     results = list(_results_store.values())
     results.sort(key=lambda r: r.get("createdAt", ""), reverse=True)
+    total = len(results)
+    if limit is not None and limit > 0:
+        results = results[:limit]
 
     return {
-        "data": {"results": results, "total": len(results)},
+        "data": {"results": results, "total": total},
         "error": None,
         "status": 200,
     }

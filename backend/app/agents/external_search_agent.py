@@ -120,12 +120,23 @@ async def external_search_agent(state: dict) -> dict:
     # Fetch max 2 per source → up to 8 raw candidates after dedup
     query_args = {"query": question, "max_results": 2}
 
-    # Run all four database searches concurrently
+    async def _safe_call(tool: str, args: dict, timeout: float = 8.0) -> list[dict]:
+        """Call an MCP tool with a per-source timeout.
+
+        Returns [] if the call times out or raises — same graceful-degradation
+        behaviour as _call_mcp_tool itself.
+        """
+        try:
+            return await asyncio.wait_for(_call_mcp_tool(tool, args), timeout=timeout)
+        except Exception:
+            return []
+
+    # Run all four database searches concurrently, each capped at 8 s.
     arxiv_papers, pubmed_papers, biorxiv_papers, medrxiv_papers = await asyncio.gather(
-        _call_mcp_tool("search_arxiv", query_args),
-        _call_mcp_tool("search_pubmed", query_args),
-        _call_mcp_tool("search_biorxiv", query_args),
-        _call_mcp_tool("search_medrxiv", query_args),
+        _safe_call("search_arxiv", query_args),
+        _safe_call("search_pubmed", query_args),
+        _safe_call("search_biorxiv", query_args),
+        _safe_call("search_medrxiv", query_args),
     )
 
     # Normalise all results

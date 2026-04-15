@@ -177,6 +177,7 @@ class AnswerCache:
         query_text: str,
         query_embedding: list[float],
         answer: dict,
+        paper_ids: list[str] | None = None,
     ) -> None:
         """Store a query embedding and its answer in the cache.
 
@@ -184,6 +185,9 @@ class AnswerCache:
             query_text:      The original (normalised) query string.
             query_embedding: The embedding vector for query_text.
             answer:          The answer dict to cache (must be JSON-serialisable).
+            paper_ids:       List of paper IDs cited by this answer.  Stored as
+                             a comma-separated string so the cache entry can be
+                             invalidated when any of those papers is deleted.
         """
         collection = self._collection()
 
@@ -202,6 +206,7 @@ class AnswerCache:
             "answer_json": answer_json,
             "stored_at": stored_at,
             "query_preview": query_text[:200],
+            "paper_ids": ",".join(paper_ids) if paper_ids else "",
         }
 
         try:

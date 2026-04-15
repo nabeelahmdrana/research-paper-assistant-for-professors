@@ -12,6 +12,7 @@
 #   The startup check below logs a WARNING if a dimension mismatch is detected.
 
 import logging
+import time
 
 import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
@@ -178,6 +179,7 @@ async def add_documents(chunks: list[dict]) -> None:
     metadatas = [chunk["metadata"] for chunk in chunks]
 
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    _invalidate_paper_count_cache()
 
 
 async def query(text: str, n_results: int = 10) -> list[dict]:
@@ -421,6 +423,7 @@ async def delete_paper(paper_id: str) -> bool:
     if ids_to_delete:
         chunks_col.delete(ids=ids_to_delete)
         deleted = True
+        _invalidate_paper_count_cache()
 
     # Also clean up papers_meta entry if present
     meta_col = get_papers_meta_collection()
@@ -446,8 +449,29 @@ async def delete_paper(paper_id: str) -> bool:
     return deleted
 
 
+# ---------------------------------------------------------------------------
+# paper_count cache (30-second TTL)
+# Avoids a full ChromaDB scan on every /api/health and /api/stats request.
+# Invalidated by add_documents() and delete_paper().
+# ---------------------------------------------------------------------------
+_paper_count_cache: tuple[int, float] | None = None  # (count, timestamp)
+_PAPER_COUNT_TTL = 30.0  # seconds
+
+
+def _invalidate_paper_count_cache() -> None:
+    global _paper_count_cache
+    _paper_count_cache = None
+
+
 async def paper_count() -> int:
-    """Return the number of unique papers stored across chunks + legacy collection."""
+    """Return the number of unique papers, using a 30-second in-memory cache."""
+    global _paper_count_cache
+    now = time.monotonic()
+    if _paper_count_cache is not None:
+        count, ts = _paper_count_cache
+        if now - ts < _PAPER_COUNT_TTL:
+            return count
+
     chunks_col = get_chunks_collection()
     paper_ids: set[str] = set()
 
@@ -475,4 +499,6 @@ async def paper_count() -> int:
     except Exception:
         pass
 
-    return len(paper_ids)
+    result = len(paper_ids)
+    _paper_count_cache = (result, now)
+    return result

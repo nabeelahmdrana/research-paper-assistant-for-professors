@@ -14,10 +14,9 @@ import logging
 import re
 from typing import AsyncGenerator
 
-from openai import AsyncOpenAI
-
 from app.config import settings
 from app.tools import vector_store
+from app.tools.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -207,8 +206,8 @@ async def analysis_agent(state: dict) -> dict:
                 len(chunks),
             )
 
-    # Cap total chunks to 15 to keep prompt + response within token limits
-    chunks = chunks[:15]
+    # GPT-4o supports 128k tokens; 40 × 512-token chunks ≈ 20k tokens — well within limits.
+    chunks = chunks[:40]
 
     if not chunks:
         # No content at all — return a graceful empty analysis
@@ -231,10 +230,7 @@ async def analysis_agent(state: dict) -> dict:
         "Now produce the JSON literature review following the format in the system prompt."
     )
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    client = get_openai_client()
 
     raw_text = ""
     try:
@@ -351,7 +347,7 @@ async def stream_analysis(
                 len(chunks),
             )
 
-    chunks = chunks[:15]
+    chunks = chunks[:40]
 
     if not chunks:
         empty_analysis = {
@@ -372,10 +368,7 @@ async def stream_analysis(
         "Now produce the JSON literature review following the format in the system prompt."
     )
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    client = get_openai_client()
 
     raw_text = ""
     # Tracks where inside raw_text the summary value begins (after opening ").

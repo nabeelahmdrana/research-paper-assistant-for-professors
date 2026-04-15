@@ -25,9 +25,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from openai import AsyncOpenAI
-
 from app.config import settings
+from app.tools.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +55,7 @@ async def query_processor(state: dict) -> dict:
     # Normalise: strip whitespace and lowercase for cache / BM25 matching
     normalized_query: str = question.strip().lower()
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    client = get_openai_client()
 
     async def _embed(text: str) -> list[float]:
         """Embed a single text string via the OpenAI API."""

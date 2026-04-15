@@ -21,6 +21,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Startup pre-warm failed (non-fatal): %s", exc)
 
+    # Pre-warm the cross-encoder reranker so the first query doesn't pay the
+    # model-load penalty (100–500 ms for CrossEncoder from disk).
+    try:
+        from app.tools.reranker import reranker as _reranker  # noqa: PLC0415
+        _reranker._load()
+        logger.info("Reranker model pre-warmed.")
+    except Exception as exc:
+        logger.warning("Reranker pre-warm failed (non-fatal): %s", exc)
+
     # Prune expired answer-cache entries (older than 30 days) on startup
     try:
         from datetime import datetime, timedelta, timezone  # noqa: PLC0415

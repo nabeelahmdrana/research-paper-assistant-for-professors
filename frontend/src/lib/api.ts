@@ -243,13 +243,14 @@ export async function getQueryResult(
   return { data: mapQueryResult(res.data), error: null, status: res.status };
 }
 
-export async function listQueryResults(): Promise<
-  ApiResponse<{ results: QueryResult[]; total: number }>
-> {
+export async function listQueryResults(
+  limit?: number,
+): Promise<ApiResponse<{ results: QueryResult[]; total: number }>> {
+  const url = limit ? `/api/research?limit=${limit}` : "/api/research";
   const res = await apiFetch<{
     results: Record<string, unknown>[];
     total: number;
-  }>("/api/research");
+  }>(url);
   if (res.error || !res.data) {
     return { data: { results: [], total: 0 }, error: res.error, status: res.status };
   }

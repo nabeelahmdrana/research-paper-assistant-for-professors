@@ -6,16 +6,16 @@ type BadgeVariant = "pdf" | "doi" | "arxiv" | "local" | "external";
 
 const variantStyles: Record<BadgeVariant, string> = {
   pdf: "bg-blue-100 text-blue-700",
-  doi: "bg-purple-100 text-purple-700",
-  arxiv: "bg-orange-100 text-orange-700",
+  doi: "bg-green-100 text-green-700",
+  arxiv: "bg-green-100 text-green-700",
   local: "bg-blue-100 text-blue-700",
   external: "bg-green-100 text-green-700",
 };
 
 const variantLabels: Record<BadgeVariant, string> = {
-  pdf: "PDF",
-  doi: "DOI",
-  arxiv: "arXiv",
+  pdf: "Library",
+  doi: "External",
+  arxiv: "External",
   local: "Library",
   external: "External",
 };

@@ -92,7 +92,11 @@ async def confidence_evaluator(state: dict) -> dict:
 
     paper_diversity: float = min(len(unique_paper_ids) / 5.0, 1.0)
 
-    confidence: float = 0.4 * rerank_signal + 0.35 * avg_similarity + 0.25 * paper_diversity
+    confidence: float = (
+        settings.confidence_weight_rerank * rerank_signal
+        + settings.confidence_weight_similarity * avg_similarity
+        + settings.confidence_weight_diversity * paper_diversity
+    )
     local_sufficient: bool = confidence >= settings.relevance_threshold
 
     logger.info(

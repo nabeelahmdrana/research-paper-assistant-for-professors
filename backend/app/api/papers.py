@@ -254,16 +254,15 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
     if not body.papers:
         raise HTTPException(status_code=400, detail="No papers provided")
 
-    imported = 0
-    total_chunks = 0
     errors: list[str] = []
 
-    for paper in body.papers:
+    async def _ingest_one(paper: dict) -> int:
+        """Ingest a single paper; return chunk count or 0 on skip/error."""
         abstract = (paper.get("abstract") or "").strip()
         title = (paper.get("title") or "").strip()
         if not abstract:
             errors.append(f'"{title}": skipped (no abstract)')
-            continue
+            return 0
 
         authors_raw = paper.get("authors", [])
         authors_str = (
@@ -279,7 +278,7 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
             "title": title,
             "authors": authors_str,
             "year": str(paper.get("year", "")),
-            "source": "local",
+            "source": "external",
             "doi": paper.get("doi", "") or "",
             "url": paper.get("url", "") or "",
             "abstract": abstract,
@@ -287,11 +286,15 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
         }
 
         try:
-            chunks = await ingest_paper(abstract, metadata)
-            total_chunks += chunks
-            imported += 1
+            return await ingest_paper(abstract, metadata)
         except Exception as exc:
             errors.append(f'"{title}": {exc}')
+            return 0
+
+    chunk_counts: list[int] = await asyncio.gather(*[_ingest_one(p) for p in body.papers])
+
+    total_chunks = sum(chunk_counts)
+    imported = sum(1 for c in chunk_counts if c > 0)
 
     return {
         "data": {
@@ -334,7 +337,7 @@ async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
         "title": title,
         "authors": authors_str,
         "year": str(body.year),
-        "source": "local",
+        "source": "external",
         "doi": body.doi or "",
         "url": body.url or "",
         "abstract": abstract,
@@ -391,6 +394,13 @@ async def delete_paper(paper_id: str) -> dict:
     deleted = await vector_store.delete_paper(paper_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found")
+
+    # Evict cached answers that cite this paper so professors never see stale results
+    try:
+        from app.api.research import invalidate_cache_for_paper  # avoid circular import
+        invalidate_cache_for_paper(paper_id)
+    except Exception as exc:
+        logger.warning("delete_paper: cache invalidation failed (non-fatal): %s", exc)
 
     return {
         "data": {"deleted": True, "paper_id": paper_id},
@@ -580,7 +590,7 @@ async def ingest_citation(body: IngestCitationRequest) -> dict:
         "title": title,
         "authors": authors_str,
         "year": year_str,
-        "source": "local",
+        "source": "external",
         "doi": doi,
         "url": url,
         "abstract": abstract,

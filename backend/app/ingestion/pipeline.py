@@ -114,11 +114,13 @@ async def ingest_paper(
     # 4. Store in ChromaDB ('chunks' collection)
     await vector_store.add_documents(chunks)
 
-    # 5. Rebuild BM25 index so hybrid search reflects the new content
+    # 5. Update BM25 index incrementally — no ChromaDB scan needed because the
+    #    new chunks are already in memory.  The retriever's cold-start path
+    #    (build_index()) handles the full rebuild after a server restart.
     try:
         from app.tools.bm25_search import bm25_index  # noqa: PLC0415
 
-        await bm25_index.build_index()
+        bm25_index.add_chunks(chunks)
     except Exception:
         # Non-fatal: hybrid search will fall back to vector-only on next query
         pass

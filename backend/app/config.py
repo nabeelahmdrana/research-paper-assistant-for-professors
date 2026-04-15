@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     relevance_threshold: float = 0.7
-    min_relevant_chunks: int = 5
     chunk_size: int = 512
     chunk_overlap: int = 64
 
@@ -29,14 +28,19 @@ class Settings(BaseSettings):
     # CORS
     frontend_url: str = "http://localhost:3000"
 
-    # Results persistence (flat JSON — kept for backward compat)
-    results_store_path: str = "./research_results.json"
+    # Results persistence — JSONL append-only file (O(1) write per result)
+    results_store_path: str = "./research_results.jsonl"
 
     # Pipeline statistics persistence (flat JSON — survives server restarts)
     stats_store_path: str = "./pipeline_stats.json"
 
     # Answer cache
     answer_cache_similarity_threshold: float = 0.90
+
+    # Confidence score weights (must sum to 1.0)
+    confidence_weight_rerank: float = 0.4
+    confidence_weight_similarity: float = 0.35
+    confidence_weight_diversity: float = 0.25
 
 
 settings = Settings()

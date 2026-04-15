@@ -36,18 +36,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     getDbStats().then((r) => r.data && setStats(r.data));
-    listQueryResults().then((r) => {
+    listQueryResults(5).then((r) => {
       if (r.data) {
-        setRecentQueries(r.data.results.slice(0, 5));
+        setRecentQueries(r.data.results);
         setTotalQueries(r.data.total);
       }
     });
-    listPapers().then((r) => {
+    listPapers(1, 5).then((r) => {
       if (r.data) {
         const sorted = [...r.data.papers].sort(
           (a, b) => new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime()
         );
-        setRecentPapers(sorted.slice(0, 5));
+        setRecentPapers(sorted);
       }
     });
     getCacheStats()

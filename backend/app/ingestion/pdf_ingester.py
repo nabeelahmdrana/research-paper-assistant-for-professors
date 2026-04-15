@@ -50,7 +50,7 @@ async def ingest_pdf_file(pdf_path: str, original_filename: str) -> dict:
         "title": extracted.get("title") or original_filename,
         "authors": "",
         "year": "",
-        "source": "local",
+        "source": "pdf",
         "doi": "",
         "date_added": datetime.now(timezone.utc).isoformat(),
     }
