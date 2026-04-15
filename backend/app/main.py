@@ -14,6 +14,22 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Pre-warm the embedding model and ChromaDB on startup."""
+    # Ensure the PDF SQLite store table exists before accepting requests
+    try:
+        from app.tools import pdf_storage as _pdf_storage  # noqa: PLC0415
+        await _pdf_storage.init_db()
+        logger.info("PDF storage (SQLite) initialised.")
+    except Exception as exc:
+        logger.warning("PDF storage init failed (non-fatal): %s", exc)
+
+    # Initialise the extended SQLite tables (recent_queries, papers, pipeline_stats)
+    try:
+        from app.tools import sqlite_store as _sqlite_store  # noqa: PLC0415
+        await _sqlite_store.init_sqlite_store()
+        logger.info("SQLite store (queries/papers/stats) initialised.")
+    except Exception as exc:
+        logger.warning("SQLite store init failed (non-fatal): %s", exc)
+
     try:
         logger.info("Pre-loading embedding model and ChromaDB collection...")
         vector_store.get_collection()

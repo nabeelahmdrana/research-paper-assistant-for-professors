@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { Search, Eye, Trash2, BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Eye, Trash2, BookOpen, ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { SkeletonRow } from "@/components/SkeletonRow";
 import { toast } from "@/components/ui/use-toast";
 import type { Paper } from "@/lib/types";
-import { listPapers, deletePaper } from "@/lib/api";
+import { listPapers, deletePaper, getPaperPdfUrl } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 const PAGE_SIZE = 20;
@@ -282,6 +282,23 @@ export default function LibraryPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {paper.hasPdf && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            asChild
+                            title="View PDF"
+                          >
+                            <a
+                              href={getPaperPdfUrl(paper.id)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <FileText className="w-4 h-4 text-blue-600" />
+                              <span className="sr-only">View PDF</span>
+                            </a>
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"

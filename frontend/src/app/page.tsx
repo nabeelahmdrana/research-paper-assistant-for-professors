@@ -252,10 +252,10 @@ export default function DashboardPage() {
             <Card>
               <CardContent className="p-6">
                 <p className="text-3xl font-bold text-blue-600">
-                  {Math.round(cacheStats.cache_hit_rate * 100)}%
+                  {Math.round((1 - cacheStats.external_usage_ratio) * 100)}%
                 </p>
                 <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
-                  <Zap className="w-3 h-3" /> Internal search
+                  <Zap className="w-3 h-3" /> Local search
                 </p>
               </CardContent>
             </Card>

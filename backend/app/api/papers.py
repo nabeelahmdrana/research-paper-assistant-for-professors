@@ -1,13 +1,17 @@
 import asyncio
+import logging
 import os
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 import httpx
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agents.external_search_agent import _call_mcp_tool
@@ -17,6 +21,8 @@ from app.ingestion.pipeline import ingest_paper
 from app.ingestion.url_ingester import ingest_by_doi_or_url
 from app.models.schemas import SaveExternalPaperRequest
 from app.tools import vector_store
+from app.tools import pdf_storage
+from app.tools import sqlite_store
 
 router = APIRouter()
 
@@ -27,7 +33,7 @@ def _make_paper_id(title: str) -> str:
     return f"ext_{slug}"
 
 
-def _build_paper_response(raw: dict) -> dict:
+def _build_paper_response(raw: dict, *, has_pdf: bool = False) -> dict:
     """Normalise a raw vector-store paper dict into the API Paper shape."""
     authors_raw = raw.get("authors", "")
     if isinstance(authors_raw, list):
@@ -51,7 +57,57 @@ def _build_paper_response(raw: dict) -> dict:
         "doi": raw.get("doi") or None,
         "url": raw.get("url") or None,
         "dateAdded": raw.get("date_added", datetime.now(timezone.utc).isoformat()),
+        "hasPdf": has_pdf,
     }
+
+
+# ---------------------------------------------------------------------------
+# SQLite persistence helper
+# ---------------------------------------------------------------------------
+
+async def _save_paper_to_sqlite(raw: dict, chunk_count: int = 0) -> None:
+    """Persist paper metadata to the SQLite papers table.
+
+    Errors are swallowed so a SQLite failure never blocks the upload response.
+    After saving, the pipeline_stats paper count is refreshed from ChromaDB.
+    """
+    try:
+        paper_id = raw.get("paper_id") or raw.get("id", "")
+        if not paper_id:
+            return
+
+        authors_raw = raw.get("authors", "")
+        if isinstance(authors_raw, list):
+            authors = authors_raw
+        else:
+            authors = [a.strip() for a in str(authors_raw).split(",") if a.strip()]
+
+        await sqlite_store.save_paper(
+            paper_id=paper_id,
+            title=raw.get("title", ""),
+            authors=authors,
+            abstract=raw.get("abstract", ""),
+            source=raw.get("source", ""),
+            file_name=raw.get("filename") or raw.get("file_name"),
+            url=raw.get("url"),
+            doi=raw.get("doi"),
+            chunk_count=chunk_count,
+            created_at=raw.get("date_added", datetime.now(timezone.utc).isoformat()),
+        )
+    except Exception as exc:
+        logger.warning("_save_paper_to_sqlite: save_paper failed (non-fatal): %s", exc)
+
+    # Refresh paper count in pipeline_stats
+    try:
+        total_papers = await vector_store.paper_count()
+        stats = await sqlite_store.fetch_pipeline_stats()
+        await sqlite_store.upsert_pipeline_stats(
+            total_papers=total_papers,
+            total_queries=stats.get("total_queries", 0),
+            avg_processing_time=stats.get("avg_processing_time", 0.0),
+        )
+    except Exception as exc:
+        logger.warning("_save_paper_to_sqlite: upsert_pipeline_stats failed (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +150,14 @@ async def upload_papers(files: list[UploadFile] = File(...)) -> dict:
 
         try:
             result = await ingest_pdf_file(tmp_path, filename)
-            uploaded.append(_build_paper_response(result))
+            paper_id = result.get("paper_id", "")
+            # Persist the original PDF bytes so users can retrieve the file later
+            if paper_id:
+                await pdf_storage.store_pdf(paper_id, filename, content)
+            uploaded.append(_build_paper_response(result, has_pdf=bool(paper_id)))
+            # Persist metadata to SQLite
+            result_with_filename = {**result, "filename": filename}
+            await _save_paper_to_sqlite(result_with_filename)
         except Exception as exc:
             errors.append(f"{filename}: {exc}")
         finally:
@@ -131,6 +194,7 @@ async def fetch_papers_by_doi(body: DoiRequest) -> dict:
         try:
             result = await ingest_by_doi_or_url(doi_or_url)
             fetched.append(_build_paper_response(result))
+            await _save_paper_to_sqlite(result)
         except Exception as exc:
             errors.append(f"{doi_or_url}: {exc}")
 
@@ -148,7 +212,10 @@ async def fetch_papers_by_doi(body: DoiRequest) -> dict:
 @router.get("/papers")
 async def list_papers(page: int = 1, page_size: int = 20) -> dict:
     """List all papers in ChromaDB with optional pagination."""
-    papers_raw = await vector_store.list_papers()
+    papers_raw, pdf_ids = await asyncio.gather(
+        vector_store.list_papers(),
+        pdf_storage.list_paper_ids(),
+    )
 
     # Sort by paper_id for stable ordering
     papers_raw.sort(key=lambda p: p.get("paper_id", ""))
@@ -158,7 +225,10 @@ async def list_papers(page: int = 1, page_size: int = 20) -> dict:
     end = start + page_size
     page_items = papers_raw[start:end]
 
-    papers = [_build_paper_response(p) for p in page_items]
+    papers = [
+        _build_paper_response(p, has_pdf=p.get("paper_id", "") in pdf_ids)
+        for p in page_items
+    ]
 
     return {
         "data": {"papers": papers, "total": total, "page": page, "page_size": page_size},
@@ -286,7 +356,9 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
         }
 
         try:
-            return await ingest_paper(abstract, metadata)
+            chunks = await ingest_paper(abstract, metadata)
+            await _save_paper_to_sqlite(metadata, chunk_count=chunks)
+            return chunks
         except Exception as exc:
             errors.append(f'"{title}": {exc}')
             return 0
@@ -349,6 +421,8 @@ async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
 
+    await _save_paper_to_sqlite(metadata, chunk_count=chunks_stored)
+
     return {
         "data": {"chunks_stored": chunks_stored, "paper_id": paper_id},
         "error": None,
@@ -380,8 +454,47 @@ async def get_paper(paper_id: str) -> dict:
         if documents:
             meta["abstract"] = " ".join(documents)
 
-    paper = _build_paper_response(meta)
+    paper = _build_paper_response(meta, has_pdf=await pdf_storage.has_pdf(paper_id))
     return {"data": paper, "error": None, "status": 200}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/{paper_id}/pdf  — stream stored PDF back to the browser
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/{paper_id}/pdf")
+async def get_paper_pdf(paper_id: str) -> StreamingResponse:
+    """Stream the original uploaded PDF file for the given paper_id.
+
+    Returns the raw PDF bytes with ``Content-Type: application/pdf`` and
+    ``Content-Disposition: inline`` so the browser opens it in a viewer tab.
+    Raises 404 if no PDF was stored for this paper (e.g. URL-ingested papers).
+    """
+    result = await pdf_storage.get_pdf(paper_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No stored PDF found for paper '{paper_id}'",
+        )
+
+    content_bytes, filename = result
+
+    # Sanitise the filename so it is safe for a Content-Disposition header
+    safe_filename = re.sub(r'[^\w\-. ]', '_', filename) or f"{paper_id}.pdf"
+    if not safe_filename.lower().endswith(".pdf"):
+        safe_filename += ".pdf"
+
+    def _iter():
+        yield content_bytes
+
+    return StreamingResponse(
+        _iter(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_filename}"',
+            "Content-Length": str(len(content_bytes)),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +503,28 @@ async def get_paper(paper_id: str) -> dict:
 
 @router.delete("/papers/{paper_id}")
 async def delete_paper(paper_id: str) -> dict:
-    """Delete a paper and all its chunks from ChromaDB."""
+    """Delete a paper and all its chunks from ChromaDB, and remove its stored PDF."""
     deleted = await vector_store.delete_paper(paper_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found")
+
+    # Remove the stored PDF file (non-fatal if it never had one)
+    await pdf_storage.delete_pdf(paper_id)
+
+    # Remove paper metadata from SQLite
+    await sqlite_store.delete_paper_record(paper_id)
+
+    # Refresh paper count in pipeline_stats
+    try:
+        total_papers = await vector_store.paper_count()
+        stats = await sqlite_store.fetch_pipeline_stats()
+        await sqlite_store.upsert_pipeline_stats(
+            total_papers=total_papers,
+            total_queries=stats.get("total_queries", 0),
+            avg_processing_time=stats.get("avg_processing_time", 0.0),
+        )
+    except Exception as exc:
+        logger.warning("delete_paper: upsert_pipeline_stats failed (non-fatal): %s", exc)
 
     # Evict cached answers that cite this paper so professors never see stale results
     try:
@@ -602,6 +733,8 @@ async def ingest_citation(body: IngestCitationRequest) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
 
+    await _save_paper_to_sqlite(metadata, chunk_count=chunks_stored)
+
     return {
         "data": {"paper_id": paper_id, "chunks_stored": chunks_stored},
         "error": None,
@@ -624,7 +757,7 @@ def _get_db_size_mb() -> float:
 
 @router.get("/stats")
 async def get_stats() -> dict:
-    """Return DB statistics: paper count, DB size, connection status."""
+    """Return DB statistics: paper count, DB size, connection status, and pipeline stats."""
     paper_count = 0
     is_connected = False
     try:
@@ -637,11 +770,20 @@ async def get_stats() -> dict:
     # on-disk footprint (sqlite, etc.) as if it were library data.
     db_size_mb = 0.0 if paper_count == 0 else _get_db_size_mb()
 
+    pipeline_stats: dict = {}
+    try:
+        pipeline_stats = await sqlite_store.fetch_pipeline_stats()
+    except Exception:
+        pass
+
     return {
         "data": {
             "paperCount": paper_count,
             "dbSizeMB": db_size_mb,
             "isConnected": is_connected,
+            "totalQueries": pipeline_stats.get("total_queries", 0),
+            "avgProcessingTime": pipeline_stats.get("avg_processing_time", 0.0),
+            "statsLastUpdated": pipeline_stats.get("last_updated", ""),
         },
         "error": None,
         "status": 200,

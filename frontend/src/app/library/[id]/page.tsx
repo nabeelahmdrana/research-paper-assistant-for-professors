@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileText, ExternalLink, Calendar, User } from "lucide-react";
+import { ArrowLeft, FileText, ExternalLink, Calendar, User, Download } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/StatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import type { Paper } from "@/lib/types";
-import { getPaper } from "@/lib/api";
+import { getPaper, getPaperPdfUrl } from "@/lib/api";
 
 function formatDate(isoDate: string): string {
   return new Date(isoDate).toLocaleDateString("en-US", {
@@ -111,6 +111,28 @@ export default function PaperDetailPage() {
         <aside>
           <Card>
             <CardContent className="p-4 space-y-4 text-sm">
+              {paper.hasPdf && (
+                <div className="flex flex-col gap-2">
+                  <a
+                    href={getPaperPdfUrl(paper.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 w-full rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 px-3 transition-colors"
+                  >
+                    <FileText className="w-4 h-4" />
+                    View PDF
+                  </a>
+                  <a
+                    href={getPaperPdfUrl(paper.id)}
+                    download
+                    className="flex items-center justify-center gap-2 w-full rounded-md border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download PDF
+                  </a>
+                </div>
+              )}
+
               <div>
                 <p className="text-xs text-gray-500 mb-1">Source</p>
                 <StatusBadge variant={paper.source} />

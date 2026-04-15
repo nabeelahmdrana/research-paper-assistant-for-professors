@@ -1,0 +1,41 @@
+
+> research-paper-assistant-frontend@0.1.0 build
+> next build
+
+  ▲ Next.js 14.2.0
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+
+./src/app/library/page.tsx
+77:6  Warning: React Hook useMemo has missing dependencies: 'EXTERNAL_SOURCES' and 'LIBRARY_SOURCES'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
+   Collecting page data ...
+   Generating static pages (0/7) ...
+   Generating static pages (1/7) 
+   Generating static pages (3/7) 
+   Generating static pages (5/7) 
+ ✓ Generating static pages (7/7)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                              Size     First Load JS
+┌ ○ /                                    4.72 kB         110 kB
+├ ○ /_not-found                          871 B          87.8 kB
+├ ○ /library                             33.5 kB         143 kB
+├ ƒ /library/[id]                        4.47 kB         110 kB
+├ ○ /query                               8.99 kB         122 kB
+├ ƒ /results/[id]                        5.92 kB         112 kB
+└ ○ /upload                              7.39 kB         112 kB
++ First Load JS shared by all            86.9 kB
+  ├ chunks/23-d27a8642f888f395.js        31.3 kB
+  ├ chunks/fd9d1056-51face16839d2cb0.js  53.6 kB
+  └ other shared chunks (total)          1.9 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

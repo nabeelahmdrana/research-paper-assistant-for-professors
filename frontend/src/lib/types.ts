@@ -9,10 +9,13 @@ export interface Paper {
   dateAdded: string;
   doi?: string;
   url?: string;
+  /** True when the original PDF file is stored locally and can be served. */
+  hasPdf?: boolean;
 }
 
 export interface Citation {
   index: number;
+  paper_id?: string;
   title: string;
   authors: string[];
   year: number;
@@ -62,6 +65,9 @@ export interface DbStats {
   paperCount: number;
   dbSizeMB: number;
   isConnected: boolean;
+  totalQueries?: number;
+  avgProcessingTime?: number;
+  statsLastUpdated?: string;
 }
 
 export interface ApiResponse<T> {

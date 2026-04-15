@@ -48,7 +48,13 @@ function mapPaper(raw: Record<string, unknown>): Paper {
     dateAdded: String(raw["dateAdded"] ?? ""),
     doi: raw["doi"] ? String(raw["doi"]) : undefined,
     url: raw["url"] ? String(raw["url"]) : undefined,
+    hasPdf: Boolean(raw["hasPdf"] ?? false),
   };
+}
+
+/** Return the URL to stream the stored PDF for a given paper_id. */
+export function getPaperPdfUrl(paperId: string): string {
+  return `${API_BASE}/api/papers/${encodeURIComponent(paperId)}/pdf`;
 }
 
 /** Map a raw backend result dict to the frontend QueryResult type. */
@@ -72,6 +78,7 @@ function mapQueryResult(raw: Record<string, unknown>): QueryResult {
         : [],
     citations: (rawCitations as Record<string, unknown>[]).map((c) => ({
       index: Number(c["index"] ?? 0),
+      paper_id: c["paper_id"] ? String(c["paper_id"]) : undefined,
       title: String(c["title"] ?? ""),
       authors: Array.isArray(c["authors"])
         ? (c["authors"] as string[])
@@ -372,6 +379,9 @@ export async function getDbStats(): Promise<ApiResponse<DbStats>> {
     paperCount: number;
     dbSizeMB: number;
     isConnected: boolean;
+    totalQueries?: number;
+    avgProcessingTime?: number;
+    statsLastUpdated?: string;
   }>("/api/stats");
   if (res.error || !res.data) {
     return {
@@ -385,6 +395,9 @@ export async function getDbStats(): Promise<ApiResponse<DbStats>> {
       paperCount: res.data.paperCount ?? 0,
       dbSizeMB: res.data.dbSizeMB ?? 0,
       isConnected: res.data.isConnected ?? false,
+      totalQueries: res.data.totalQueries ?? 0,
+      avgProcessingTime: res.data.avgProcessingTime ?? 0,
+      statsLastUpdated: res.data.statsLastUpdated ?? "",
     },
     error: null,
     status: res.status,

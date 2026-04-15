@@ -7,7 +7,8 @@ import {
   ArrowLeft,
   Copy,
   Download,
-  ExternalLink,
+  FileText,
+  BookOpen,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,8 +16,8 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/StatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { toast } from "@/components/ui/use-toast";
-import type { QueryResult } from "@/lib/types";
-import { getQueryResult, checkPaperExists, ingestCitation } from "@/lib/api";
+import type { QueryResult, Paper } from "@/lib/types";
+import { getQueryResult, checkPaperExists, ingestCitation, getPaper, getPaperPdfUrl } from "@/lib/api";
 
 function formatDate(isoDate: string): string {
   return new Date(isoDate).toLocaleDateString("en-US", {
@@ -37,23 +38,42 @@ export default function ResultDetailPage() {
   const [savedCitations, setSavedCitations] = useState<Set<number>>(new Set());
   // citation index → true means currently downloading
   const [downloadingCitations, setDownloadingCitations] = useState<Set<number>>(new Set());
+  // paper_id → Paper for local citations (to check hasPdf)
+  const [localPaperMap, setLocalPaperMap] = useState<Record<string, Paper>>({});
 
   useEffect(() => {
     getQueryResult(id).then(async (r) => {
       if (r.data) {
         setResult(r.data);
+
         // Check which external citations are already in the library
         const external = r.data.citations.filter((c) => c.source === "external");
-        if (external.length > 0) {
-          const checks = await Promise.all(
-            external.map((c) => checkPaperExists(c.doi, c.title))
-          );
-          const alreadySaved = new Set<number>();
-          external.forEach((c, i) => {
-            if (checks[i].exists) alreadySaved.add(c.index);
-          });
-          setSavedCitations(alreadySaved);
-        }
+        const localWithId = r.data.citations.filter(
+          (c) => c.source === "local" && c.paper_id
+        );
+
+        const [checks, paperResults] = await Promise.all([
+          external.length > 0
+            ? Promise.all(external.map((c) => checkPaperExists(c.doi, c.title)))
+            : Promise.resolve([]),
+          localWithId.length > 0
+            ? Promise.all(localWithId.map((c) => getPaper(c.paper_id!)))
+            : Promise.resolve([]),
+        ]);
+
+        const alreadySaved = new Set<number>();
+        external.forEach((c, i) => {
+          if (checks[i]?.exists) alreadySaved.add(c.index);
+        });
+        setSavedCitations(alreadySaved);
+
+        const paperMap: Record<string, Paper> = {};
+        localWithId.forEach((c, i) => {
+          if (paperResults[i]?.data) {
+            paperMap[c.paper_id!] = paperResults[i].data!;
+          }
+        });
+        setLocalPaperMap(paperMap);
       } else {
         setNotFound(true);
       }
@@ -257,6 +277,18 @@ export default function ResultDetailPage() {
                   const isExternal = citation.source === "external";
                   const isSaved = savedCitations.has(citation.index);
                   const isDownloading = downloadingCitations.has(citation.index);
+
+                  // Best link to view the source content:
+                  // 1. Stored PDF (local library upload)
+                  // 2. External URL (arXiv, journal page, etc.)
+                  // 3. DOI resolver
+                  const pdfLink =
+                    citation.source === "local" &&
+                    citation.paper_id &&
+                    localPaperMap[citation.paper_id]?.hasPdf
+                      ? getPaperPdfUrl(citation.paper_id)
+                      : citation.url ?? (citation.doi ? `https://doi.org/${citation.doi}` : null);
+
                   return (
                     <div key={citation.index} className="flex items-start gap-2">
                       <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
@@ -271,17 +303,34 @@ export default function ResultDetailPage() {
                         </p>
                         <div className="flex items-center gap-1 mt-1 flex-wrap">
                           <StatusBadge variant={citation.source} />
-                          {(citation.doi ?? citation.url) && (
+
+                          {/* View PDF / source — always shown when a link is available */}
+                          {pdfLink && (
                             <a
-                              href={citation.url ?? `https://doi.org/${citation.doi}`}
+                              href={pdfLink}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-blue-500 hover:text-blue-700"
-                              aria-label="Open paper link"
+                              className="flex items-center gap-0.5 text-xs text-violet-600 hover:text-violet-800 font-medium"
+                              title="View PDF / source"
                             >
-                              <ExternalLink className="w-3 h-3" />
+                              <BookOpen className="w-3 h-3" />
+                              <span>View PDF</span>
                             </a>
                           )}
+
+                          {/* For local papers: quick link to their library detail page */}
+                          {citation.source === "local" && citation.paper_id && (
+                            <Link
+                              href={`/library/${citation.paper_id}`}
+                              className="text-blue-500 hover:text-blue-700"
+                              aria-label="View in library"
+                              title="View in library"
+                            >
+                              <FileText className="w-3 h-3" />
+                            </Link>
+                          )}
+
+                          {/* Save external citation to library */}
                           {isExternal && !isSaved && (
                             <button
                               onClick={() => handleDownloadCitation(citation)}

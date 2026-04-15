@@ -35,6 +35,7 @@ from app.agents.storage_agent import storage_agent
 from app.agents.supervisor import ResearchState, run_research_pipeline
 from app.config import settings
 from app.models.schemas import ConfirmSelectionRequest
+from app.tools import sqlite_store
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,42 @@ def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> No
         _stats["external_queries"] += 1
     _stats["confidence_sum"] += confidence
     _save_stats(_stats)
+
+
+async def _persist_result_to_sqlite(result: dict) -> None:
+    """Save a completed research result to the SQLite recent_queries table.
+
+    Also refreshes the pipeline_stats row so the dashboard always shows
+    up-to-date totals.  Errors are swallowed so a SQLite failure never
+    breaks the API response.
+    """
+    try:
+        await sqlite_store.save_query(
+            query_id=result.get("id", ""),
+            question=result.get("question", ""),
+            summary=result.get("summary", ""),
+            agreements=result.get("agreements", []),
+            contradictions=result.get("contradictions", []),
+            gaps=result.get("researchGaps", []),
+            citations=result.get("citations", []),
+            created_at=result.get("createdAt", ""),
+        )
+    except Exception as exc:
+        logger.warning("_persist_result_to_sqlite: save_query failed (non-fatal): %s", exc)
+
+    # Keep pipeline_stats in sync
+    try:
+        total = int(_stats["total_queries"])
+        avg_confidence = (
+            _stats["confidence_sum"] / total if total > 0 else 0.0
+        )
+        await sqlite_store.upsert_pipeline_stats(
+            total_papers=0,   # updated by papers.py; use 0 here to avoid overwriting
+            total_queries=total,
+            avg_processing_time=round(avg_confidence, 4),
+        )
+    except Exception as exc:
+        logger.warning("_persist_result_to_sqlite: upsert_pipeline_stats failed (non-fatal): %s", exc)
 
 
 def _external_discovery_used(local_sufficient: bool, external_papers: list) -> bool:
@@ -404,6 +441,7 @@ async def run_research(body: ResearchQueryRequest) -> dict:
     _save_results(_results_store)
     if not _is_no_result_response(result):
         _exact_query_cache[normalized_question] = result
+    await _persist_result_to_sqlite(result)
 
     return {"data": result, "error": None, "status": 200}
 
@@ -574,6 +612,7 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
         ),
         confidence=result["confidenceScore"],
     )
+    await _persist_result_to_sqlite(result)
 
     yield _sse_event({"stage": "complete", "data": result})
 
@@ -709,6 +748,7 @@ async def confirm_research(body: ConfirmSelectionRequest) -> dict:
     # Persist
     _results_store[result_id] = result
     _save_results(_results_store)
+    await _persist_result_to_sqlite(result)
 
     return {"data": result, "error": None, "status": 200}
 
