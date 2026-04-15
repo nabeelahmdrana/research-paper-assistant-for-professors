@@ -51,10 +51,15 @@ def _get_client() -> chromadb.ClientAPI:
 def _get_embedding_fn() -> OpenAIEmbeddingFunction:
     global _embedding_fn
     if _embedding_fn is None:
-        _embedding_fn = OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name=settings.embedding_model,
-        )
+        kwargs: dict = {
+            "api_key": settings.openai_api_key,
+            "model_name": settings.embedding_model,
+        }
+        # Route through the configured base URL (e.g. a custom OpenAI-compatible
+        # endpoint) so the same API key works for both the LLM and embeddings.
+        if settings.openai_base_url and settings.openai_base_url != "https://api.openai.com/v1":
+            kwargs["api_base"] = settings.openai_base_url
+        _embedding_fn = OpenAIEmbeddingFunction(**kwargs)
     return _embedding_fn
 
 
@@ -140,6 +145,20 @@ def get_collection() -> chromadb.Collection:
     return get_chunks_collection()
 
 
+def reset_collection_singletons() -> None:
+    """Drop all cached collection references so they are re-opened on next access.
+
+    Call this after the ChromaDB directory has been wiped so stale collection
+    objects are not reused.
+    """
+    global _client, _chunks_collection, _papers_meta_collection, _answers_collection
+    _client = None
+    _chunks_collection = None
+    _papers_meta_collection = None
+    _answers_collection = None
+    logger.info("vector_store: collection singletons reset")
+
+
 # ---------------------------------------------------------------------------
 # Chunk CRUD — operates on the 'chunks' collection
 # ---------------------------------------------------------------------------
@@ -158,7 +177,7 @@ async def add_documents(chunks: list[dict]) -> None:
     documents = [chunk["text"] for chunk in chunks]
     metadatas = [chunk["metadata"] for chunk in chunks]
 
-    collection.add(ids=ids, documents=documents, metadatas=metadatas)
+    collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
 
 async def query(text: str, n_results: int = 10) -> list[dict]:

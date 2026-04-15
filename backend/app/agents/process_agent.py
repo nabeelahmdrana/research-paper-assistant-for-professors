@@ -44,7 +44,7 @@ async def process_agent(state: dict) -> dict:
             "title": paper.get("title", ""),
             "authors": authors_str,
             "year": str(paper.get("year", "")),
-            "source": "external",
+            "source": "local",
             "doi": paper.get("doi", "") or "",
             "url": paper.get("url", "") or "",
         }

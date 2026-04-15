@@ -2,18 +2,11 @@
 
 Phase 4 / Phase C: accepts queries and returns results from the RAG pipeline.
 
-Two-step external flow (Phase C):
-  POST /api/research
-    - Runs the pipeline.
-    - If local confidence is sufficient, returns the final analysis immediately.
-    - If local confidence < 0.70, returns candidate external papers with
-      status "needs_external_selection" and a result_id so the frontend can
-      let the professor choose which papers to ingest.
+POST /api/research runs the LangGraph supervisor (cache → retrieve → rerank →
+confidence → optional MCP discovery when the library has no chunks → analysis).
 
-  POST /api/research/confirm
-    - Accepts {result_id, selected_paper_ids}.
-    - Ingests the selected external papers via process_agent logic.
-    - Runs analysis_agent + storage_agent and returns the final answer.
+POST /api/research/confirm completes the two-step flow when a pending result_id
+exists: ingests selected external papers, then runs analysis + storage.
 
 Results are persisted to a JSON file so they survive server restarts.
 """
@@ -70,6 +63,32 @@ _stats: dict[str, float] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# In-memory exact-match query cache (normalized question → last result)
+# Bypasses ALL pipeline stages including OpenAI API calls for identical queries.
+# Seeded from _results_store at startup so cache survives server restarts.
+# ---------------------------------------------------------------------------
+
+_exact_query_cache: dict[str, dict] = {}
+
+
+def _seed_exact_cache(results: dict[str, dict]) -> None:
+    """Populate _exact_query_cache from persisted results at startup."""
+    for result in results.values():
+        question = result.get("question", "")
+        if not question:
+            continue
+        # Never seed "no relevant papers" entries — they become stale the moment
+        # new papers are uploaded and would keep blocking future queries.
+        if _is_no_result_response(result):
+            continue
+        key = question.strip().lower()
+        # Keep the most recent result for each normalized question
+        existing = _exact_query_cache.get(key)
+        if existing is None or result.get("createdAt", "") > existing.get("createdAt", ""):
+            _exact_query_cache[key] = result
+
+
 def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> None:
     """Update in-memory stats after a pipeline run."""
     _stats["total_queries"] += 1
@@ -78,6 +97,28 @@ def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> No
     if external_used:
         _stats["external_queries"] += 1
     _stats["confidence_sum"] += confidence
+
+
+def _external_discovery_used(local_sufficient: bool, external_papers: list) -> bool:
+    """True when MCP returned candidates (library had no chunks to analyze)."""
+    return (not local_sufficient) and len(external_papers) > 0
+
+
+_NO_RESULT_MARKERS = (
+    "no relevant papers",
+    "do not contain information relevant",
+    "papers in your library do not",
+)
+
+
+def _is_no_result_response(result: dict) -> bool:
+    """Return True when the result is a 'no relevant papers found' placeholder.
+
+    These should never be stored in any cache — new papers may be uploaded
+    between queries and the negative answer would become stale immediately.
+    """
+    summary: str = (result.get("summary") or "").lower()
+    return any(marker in summary for marker in _NO_RESULT_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +156,8 @@ def _save_results(results: dict[str, dict]) -> None:
 
 # Load existing results at module import so GET endpoints work immediately
 _results_store: dict[str, dict] = _load_results()
+# Seed exact-match cache from persisted results
+_seed_exact_cache(_results_store)
 
 
 # ---------------------------------------------------------------------------
@@ -154,16 +197,27 @@ def _assemble_result(result_id: str, question: str, final_state: dict) -> dict:
 async def run_research(body: ResearchQueryRequest) -> dict:
     """Run a research query through the RAG pipeline.
 
-    Returns either:
-    - A final analysis result (status "complete") when local content is
-      sufficient or a cached answer is available.
-    - A candidate list of external papers (status "needs_external_selection")
-      when local confidence < 0.70. The frontend should present these papers
-      to the professor and call POST /api/research/confirm with the chosen
-      paper IDs.
+    Returns a structured analysis (and metadata such as ``externalPapersFetched``
+    when MCP discovery ran because the vector store had no relevant chunks).
     """
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    # --- Exact-match cache: zero API calls for identical repeated questions ---
+    normalized_question = body.question.strip().lower()
+    exact_hit = _exact_query_cache.get(normalized_question)
+    if exact_hit is not None:
+        logger.info(
+            "POST /research: EXACT CACHE HIT for '%s…' — returning instantly (0 API calls)",
+            body.question[:60],
+        )
+        instant_result = {**exact_hit, "id": str(uuid.uuid4()), "cacheHit": True}
+        _record_query(
+            cache_hit=True,
+            external_used=False,
+            confidence=instant_result.get("confidenceScore", 0.0),
+        )
+        return {"data": instant_result, "error": None, "status": 200}
 
     try:
         result = await run_research_pipeline(body.question)
@@ -181,7 +235,7 @@ async def run_research(body: ResearchQueryRequest) -> dict:
     local_sufficient: bool = result.get("local_sufficient", True)
 
     if cache_hit:
-        logger.info("POST /research: CACHE HIT for '%s…' — returning instantly", body.question[:60])
+        logger.info("POST /research: SEMANTIC CACHE HIT for '%s…'", body.question[:60])
     else:
         logger.info(
             "POST /research: cache MISS — confidence=%.2f local_sufficient=%s external=%d",
@@ -190,14 +244,15 @@ async def run_research(body: ResearchQueryRequest) -> dict:
 
     _record_query(
         cache_hit=cache_hit,
-        external_used=bool(external_papers) and not local_sufficient,
+        external_used=_external_discovery_used(local_sufficient, external_papers),
         confidence=confidence,
     )
 
-    # The pipeline always produces a complete analysis (external_search now
-    # feeds directly into analysis_agent). Persist and return immediately.
+    # Persist result; only update exact-match cache for meaningful answers
     _results_store[result["id"]] = result
     _save_results(_results_store)
+    if not _is_no_result_response(result):
+        _exact_query_cache[normalized_question] = result
 
     return {"data": result, "error": None, "status": 200}
 
@@ -247,14 +302,30 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
         "analysis": {},
     }
 
+    # --- Exact-match cache: zero API calls for identical repeated questions ---
+    exact_hit = _exact_query_cache.get(question.strip().lower())
+    if exact_hit is not None:
+        logger.info(
+            "SSE stream: EXACT CACHE HIT for '%s…' — returning instantly", question[:60]
+        )
+        result = {
+            **exact_hit,
+            "id": str(uuid.uuid4()),
+            "cacheHit": True,
+        }
+        _results_store[result["id"]] = result
+        _save_results(_results_store)
+        _record_query(cache_hit=True, external_used=False, confidence=result.get("confidenceScore", 0.0))
+        yield _sse_event({"stage": "checking_cache"})
+        yield _sse_event({"stage": "complete", "data": result})
+        return
+
     try:
         # --- Query processing ---
         state = await query_processor(state)  # type: ignore[assignment]
         yield _sse_event({"stage": "processing_query"})
 
-        state = await query_expander(state)  # type: ignore[assignment]
-        yield _sse_event({"stage": "expanding_query"})
-
+        # --- Cache check BEFORE query expansion to skip the LLM call on hits ---
         state = await cache_checker(state)  # type: ignore[assignment]
         yield _sse_event({"stage": "checking_cache"})
 
@@ -272,7 +343,7 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
                 "citations": cached.get("citations", []),
                 "externalPapersFetched": False,
                 "newPapersCount": 0,
-                "confidenceScore": state.get("confidence_score", 0.0),
+                "confidenceScore": cached.get("confidenceScore", 0.0),
                 "cacheHit": True,
                 "query_embedding": state.get("query_embedding", []),
             }
@@ -281,6 +352,10 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
             _record_query(cache_hit=True, external_used=False, confidence=result["confidenceScore"])
             yield _sse_event({"stage": "complete", "data": result})
             return
+
+        # --- Query expansion (only on cache miss) ---
+        state = await query_expander(state)  # type: ignore[assignment]
+        yield _sse_event({"stage": "expanding_query"})
 
         # --- Retrieval + reranking ---
         state = await retriever(state)  # type: ignore[assignment]
@@ -292,8 +367,9 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
         state = await confidence_evaluator(state)  # type: ignore[assignment]
         yield _sse_event({"stage": "evaluating"})
 
-        # --- External search when local coverage is insufficient ---
-        if not state.get("local_sufficient", False):
+        # --- External discovery only when the library returned no chunks (matches supervisor) ---
+        reranked_for_external = state.get("reranked_chunks") or []
+        if not state.get("local_sufficient", False) and not reranked_for_external:
             state = await external_search_agent(state)  # type: ignore[assignment]
             yield _sse_event({"stage": "searching_external"})
 
@@ -337,9 +413,14 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
 
     _results_store[result["id"]] = result
     _save_results(_results_store)
+    if not _is_no_result_response(result):
+        _exact_query_cache[question.strip().lower()] = result
     _record_query(
         cache_hit=False,
-        external_used=not state.get("local_sufficient", True),
+        external_used=_external_discovery_used(
+            state.get("local_sufficient", True),
+            state.get("external_papers") or [],
+        ),
         confidence=result["confidenceScore"],
     )
 

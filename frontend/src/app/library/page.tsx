@@ -55,6 +55,9 @@ export default function LibraryPage() {
     });
   }, []);
 
+  /** Papers stored in Chroma (upload, DOI/URL ingest, import). ``external`` is legacy metadata only. */
+  const LIBRARY_SOURCES = new Set(["pdf", "doi", "arxiv", "local"]);
+
   const filteredPapers = useMemo(() => {
     return papers.filter((p) => {
       const matchesSearch =
@@ -63,7 +66,10 @@ export default function LibraryPage() {
         p.authors.some((a) =>
           a.toLowerCase().includes(searchQuery.toLowerCase())
         );
-      const matchesSource = sourceFilter === "all" || p.source === sourceFilter;
+      const matchesSource =
+        sourceFilter === "all" ||
+        (sourceFilter === "local" && LIBRARY_SOURCES.has(p.source)) ||
+        (sourceFilter === "external" && p.source === "external");
       const matchesYearFrom = !yearFrom || p.year >= parseInt(yearFrom);
       const matchesYearTo = !yearTo || p.year <= parseInt(yearTo);
       return matchesSearch && matchesSource && matchesYearFrom && matchesYearTo;
@@ -163,33 +169,11 @@ export default function LibraryPage() {
             <SelectValue placeholder="Source" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Sources</SelectItem>
-            <SelectItem value="pdf">PDF</SelectItem>
-            <SelectItem value="doi">DOI</SelectItem>
-            <SelectItem value="arxiv">arXiv</SelectItem>
+            <SelectItem value="all">All sources</SelectItem>
+            <SelectItem value="local">Library</SelectItem>
+            <SelectItem value="external">Legacy &quot;External&quot; tag</SelectItem>
           </SelectContent>
         </Select>
-
-        <Input
-          type="number"
-          value={yearFrom}
-          onChange={(e) => {
-            setYearFrom(e.target.value);
-            setCurrentPage(1);
-          }}
-          placeholder="From"
-          className="w-20"
-        />
-        <Input
-          type="number"
-          value={yearTo}
-          onChange={(e) => {
-            setYearTo(e.target.value);
-            setCurrentPage(1);
-          }}
-          placeholder="To"
-          className="w-20"
-        />
 
         {selectedIds.size > 0 && (
           <Button

@@ -89,9 +89,20 @@ async def retriever(state: dict) -> dict:
     sub_queries: list[str] = state.get("sub_queries", [])
     hyde_embedding: list[float] = state.get("hyde_embedding", [])
 
-    # Ensure BM25 index is ready before launching parallel searches.
-    # Index build is async so it must complete before asyncio.gather.
-    if not bm25_index.is_ready:
+    # Ensure BM25 index is in sync with ChromaDB before launching searches.
+    # If BM25 has chunks but ChromaDB is empty (e.g. after a wipe), reset
+    # and rebuild so stale in-memory data is never used.
+    chroma_chunk_count: int = 0
+    try:
+        chroma_chunk_count = vector_store.get_chunks_collection().count()
+    except Exception:
+        pass
+
+    if bm25_index.is_ready and chroma_chunk_count == 0:
+        logger.info("Retriever: ChromaDB is empty but BM25 has stale data — resetting indexes")
+        bm25_index.reset()
+        vector_store.reset_collection_singletons()
+    elif not bm25_index.is_ready and chroma_chunk_count > 0:
         logger.info("Retriever: BM25 index is empty — rebuilding from ChromaDB")
         try:
             await bm25_index.build_index()

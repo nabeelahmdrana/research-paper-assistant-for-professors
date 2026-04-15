@@ -3,6 +3,7 @@ export interface Paper {
   title: string;
   authors: string[];
   year: number;
+  /** Ingestion channel; ``local``/``pdf``/… mean stored in your library. ``external`` is legacy rows only. */
   source: "pdf" | "doi" | "arxiv" | "local" | "external";
   abstract: string;
   dateAdded: string;
@@ -15,6 +16,7 @@ export interface Citation {
   title: string;
   authors: string[];
   year: number;
+  /** ``local`` = excerpt from your Chroma chunks; ``external`` = MCP abstract-only context. */
   source: "local" | "external";
   doi?: string;
   url?: string;

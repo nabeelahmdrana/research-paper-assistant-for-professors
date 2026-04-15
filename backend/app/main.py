@@ -81,7 +81,7 @@ async def get_cache_stats() -> dict:
     Returns:
         cache_hit_rate        — fraction of queries served from cache
         avg_confidence        — mean confidence score across all queries
-        external_usage_ratio  — fraction of queries that triggered external search
+        external_usage_ratio  — fraction of queries where MCP discovery ran (empty library chunks)
         total_queries         — total queries processed since server start
         cached_answers        — number of answers stored in the ChromaDB cache
     """

@@ -45,7 +45,6 @@ export function Navbar() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 font-bold text-blue-600 text-lg">
           <BookOpen className="w-5 h-5" />
-          <span>ResearchAI</span>
         </Link>
 
         {/* Desktop nav */}

@@ -104,6 +104,17 @@ class BM25Index:
 
         return results
 
+    def reset(self) -> None:
+        """Clear the in-memory index (called when ChromaDB is wiped)."""
+        self._index = None
+        self._chunks = []
+        logger.info("BM25: index cleared")
+
+    @property
+    def chunk_count(self) -> int:
+        """Number of chunks currently in the index."""
+        return len(self._chunks)
+
     @property
     def is_ready(self) -> bool:
         """True if the index has been built and contains at least one chunk."""

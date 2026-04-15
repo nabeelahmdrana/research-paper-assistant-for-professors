@@ -75,17 +75,6 @@ export default function ResultDetailPage() {
     toast({ title: "Copied to clipboard!" });
   };
 
-  const handleExportMarkdown = () => {
-    if (!result) return;
-    const text = buildFullText(result);
-    const blob = new Blob([text], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `review-${formatDate(result.createdAt).replace(/\s/g, "-")}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   const handleExportPdf = () => {
     window.print();
@@ -145,14 +134,6 @@ export default function ResultDetailPage() {
           >
             <Copy className="w-4 h-4 mr-2" />
             Copy to Clipboard
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportMarkdown}
-          >
-            <FileText className="w-4 h-4 mr-2" />
-            Export Markdown
           </Button>
           <Button
             variant="outline"

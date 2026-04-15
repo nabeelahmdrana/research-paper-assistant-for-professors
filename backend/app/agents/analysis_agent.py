@@ -56,17 +56,31 @@ IMPORTANT RULES:
 2. Never fabricate or infer paper titles, authors, or years not in the excerpts.
 3. Use citation indices like [1], [2] etc. that correspond to the "Papers" list.
 4. Return ONLY valid JSON — no markdown, no prose outside the JSON object.
+5. The "summary" field MUST be at least 200 words. Write a thorough, detailed overview.
+6. CRITICAL — relevance check: Before writing, verify the excerpts directly address the
+   research question. If NONE of the excerpts address the research question (e.g. the
+   question asks about physics but ALL excerpts discuss unrelated biology/medicine), set
+   "summary" to exactly:
+   "The papers in your library do not contain information relevant to this query. Please
+   upload papers on this topic or use the external search feature to discover relevant
+   literature." and set agreements, contradictions, researchGaps, and citations to empty
+   arrays []. Never describe unrelated content as if it answers the question.
+7. CITATIONS — only include papers in the "citations" array that you ACTUALLY REFERENCED
+   in your summary or other fields. Do NOT list papers that are off-topic and not mentioned
+   in your analysis. If a paper discusses a completely different field than the question,
+   omit it from citations entirely. The citations array must contain ONLY papers that
+   genuinely contributed to the answer.
 
 Return a JSON object with exactly these keys:
 {
-  "summary": "<2–4 sentence overview of the state of research on the topic>",
+  "summary": "<comprehensive overview of the state of research on the topic — must be at least 200 words, covering key themes, major findings, methodological approaches, and the overall trajectory of the field>",
   "agreements": ["<consensus finding [ref]>", ...],
   "contradictions": ["<conflicting findings [refs]>", ...],
   "researchGaps": ["<identified gap or open question>", ...],
   "citations": [
     {
       "index": 1,
-      "title": "<exact title from Papers list>",
+      "title": "<exact title from Papers list — ONLY papers you actually cited>",
       "authors": ["<author1>", ...],
       "year": <year as integer or 0 if unknown>,
       "source": "<local|external>",
@@ -154,9 +168,8 @@ async def analysis_agent(state: dict) -> dict:
     """Generate a literature review using an OpenAI-compatible LLM.
 
     Chunk selection priority:
-        1. state["reranked_chunks"]     — best (cross-encoder selected)
-        2. state["retrieved_chunks"][:12] — fallback if reranker was skipped
-        3. Fresh ChromaDB query          — last-resort backward-compat path
+        1. state["reranked_chunks"]  — relevance-filtered by cross-encoder
+        2. state["external_papers"]  — abstracts from external search (when local had no relevant chunks)
 
     Populates:
         state["analysis"] – dict with summary, agreements, contradictions,
@@ -164,18 +177,14 @@ async def analysis_agent(state: dict) -> dict:
     """
     question: str = state["question"]
 
-    # Prefer reranked chunks; fall back gracefully
+    # Use reranked chunks (already filtered by _MIN_RERANK_SCORE in reranker_agent).
+    # Do NOT fall back to raw retrieved_chunks — those bypassed the relevance filter
+    # and would reintroduce off-topic content that the reranker deliberately excluded.
     chunks: list[dict] = state.get("reranked_chunks", [])
-    if not chunks:
-        chunks = state.get("retrieved_chunks", [])[:20]
 
     if not chunks:
-        # Last resort: re-query ChromaDB (legacy path)
-        n_fetch = max(settings.min_relevant_chunks * 3, 30)
-        chunks = await vector_store.query(question, n_results=n_fetch)
-
-    if not chunks:
-        # Use external paper abstracts directly as chunks (external_search path)
+        # Reranked chunks empty means local library had nothing relevant.
+        # Use external paper abstracts (populated by external_search_agent).
         external_papers: list[dict] = state.get("external_papers", [])
         for paper in external_papers[:10]:  # cap to avoid oversized context
             abstract = paper.get("abstract", "").strip()
@@ -232,6 +241,7 @@ async def analysis_agent(state: dict) -> dict:
         response = await client.chat.completions.create(
             model=settings.openai_model,
             max_tokens=8192,
+            temperature=0.1,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -314,13 +324,9 @@ async def stream_analysis(
     """
     question: str = state["question"]
 
+    # Use reranked chunks (relevance-filtered). Do NOT fall back to raw
+    # retrieved_chunks — they bypass the reranker's relevance filter.
     chunks: list[dict] = state.get("reranked_chunks", [])
-    if not chunks:
-        chunks = state.get("retrieved_chunks", [])[:20]
-
-    if not chunks:
-        n_fetch = max(settings.min_relevant_chunks * 3, 30)
-        chunks = await vector_store.query(question, n_results=n_fetch)
 
     if not chunks:
         external_papers: list[dict] = state.get("external_papers", [])
@@ -384,6 +390,7 @@ async def stream_analysis(
         stream = await client.chat.completions.create(
             model=settings.openai_model,
             max_tokens=8192,
+            temperature=0.1,
             stream=True,
             response_format={"type": "json_object"},
             messages=[

@@ -182,10 +182,10 @@ async def search_external_papers(
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    query_args = {"query": q, "max_results": limit}
+    per_source_args = {"query": q, "max_results": 2}
     arxiv_papers, pubmed_papers = await asyncio.gather(
-        _call_mcp_tool("search_arxiv", query_args),
-        _call_mcp_tool("search_pubmed", query_args),
+        _call_mcp_tool("search_arxiv", per_source_args),
+        _call_mcp_tool("search_pubmed", per_source_args),
     )
 
     def _parse_year(published_date: str) -> str:
@@ -216,10 +216,12 @@ async def search_external_papers(
             "source": "external",
         })
 
-    # Deduplicate by lowercased title
+    # Deduplicate by lowercased title and cap at 8
     seen: set[str] = set()
     deduped: list[dict] = []
     for paper in combined:
+        if len(deduped) >= 8:
+            break
         key = paper["title"].lower().strip()
         if key and key not in seen:
             seen.add(key)
@@ -275,7 +277,7 @@ async def import_external_papers(body: ImportPapersRequest) -> dict:
             "title": title,
             "authors": authors_str,
             "year": str(paper.get("year", "")),
-            "source": "external",
+            "source": "local",
             "doi": paper.get("doi", "") or "",
             "url": paper.get("url", "") or "",
             "abstract": abstract,
@@ -330,7 +332,7 @@ async def save_external_paper(body: SaveExternalPaperRequest) -> dict:
         "title": title,
         "authors": authors_str,
         "year": str(body.year),
-        "source": "external",
+        "source": "local",
         "doi": body.doi or "",
         "url": body.url or "",
         "abstract": abstract,
@@ -419,10 +421,14 @@ async def get_stats() -> dict:
     except Exception:
         pass
 
+    # No ingested papers → report 0 MB so the UI does not show Chroma's empty
+    # on-disk footprint (sqlite, etc.) as if it were library data.
+    db_size_mb = 0.0 if paper_count == 0 else _get_db_size_mb()
+
     return {
         "data": {
             "paperCount": paper_count,
-            "dbSizeMB": _get_db_size_mb(),
+            "dbSizeMB": db_size_mb,
             "isConnected": is_connected,
         },
         "error": None,

@@ -4,9 +4,11 @@ Orchestrates all agents using a LangGraph StateGraph:
 
     query_processor
         ↓
-    cache_checker
+    cache_checker  ← runs BEFORE query_expander to short-circuit on hit
         ├── cache_hit=True  ──────────────────────────────────→ END
         └── cache_hit=False
+                ↓
+            query_expander  ← only runs on cache miss (saves one LLM call)
                 ↓
             retriever
                 ↓
@@ -14,11 +16,12 @@ Orchestrates all agents using a LangGraph StateGraph:
                 ↓
             confidence_evaluator
                 ├── local_sufficient=True  → analysis_agent → storage_agent → END
-                └── local_sufficient=False → external_search_agent → END
-                                              (returns candidates only;
-                                               ingestion happens after
-                                               professor confirms via
-                                               POST /api/research/confirm)
+                └── local_sufficient=False
+                        ├── reranked_chunks non-empty → analysis_agent → storage_agent → END
+                        │   (local-first: answer from Chroma even if confidence is low)
+                        └── reranked_chunks empty → external_search_agent → analysis_agent
+                                → storage_agent → END
+                            (MCP discovery only when the library has no chunks to analyze)
 """
 
 import uuid
@@ -87,19 +90,24 @@ class ResearchState(TypedDict):
 # ---------------------------------------------------------------------------
 
 def _route_after_cache(state: ResearchState) -> str:
-    """After cache_checker: short-circuit on hit, else proceed to retriever."""
-    return "end" if state.get("cache_hit", False) else "retriever"
+    """After cache_checker: short-circuit on hit, else proceed to query_expander."""
+    return "end" if state.get("cache_hit", False) else "query_expander"
 
 
 def _route_after_confidence(state: ResearchState) -> str:
-    """After confidence_evaluator: go straight to analysis or external search.
+    """After confidence_evaluator: analyze from library, or discover externally if empty.
 
-    When local content is insufficient, the graph fetches external candidates
-    but does NOT ingest them.  The API layer returns them for user selection
-    via the two-step /confirm flow, which runs process_agent only on the
-    papers the professor approves.
+    External MCP search runs only when confidence is below threshold *and*
+    there are no reranked chunks from Chroma — otherwise the analysis agent
+    would still prefer library excerpts anyway, and counting that as
+    ``external`` usage would mislead users.
     """
-    return "analyze" if state.get("local_sufficient", False) else "external_search"
+    if state.get("local_sufficient", False):
+        return "analyze"
+    reranked: list[dict] = state.get("reranked_chunks") or []
+    if reranked:
+        return "analyze"
+    return "external_search"
 
 
 # ---------------------------------------------------------------------------
@@ -123,19 +131,22 @@ def _build_graph() -> StateGraph:
     # Entry point
     workflow.set_entry_point("query_processor")
 
-    # Linear edges — query_expander runs after embedding, before cache check
-    workflow.add_edge("query_processor", "query_expander")
-    workflow.add_edge("query_expander", "cache_checker")
+    # Cache check runs immediately after embedding — before query_expander.
+    # This means a semantic cache hit skips the gpt-4o-mini expansion call.
+    workflow.add_edge("query_processor", "cache_checker")
 
-    # Cache branch
+    # Cache branch: hit → END, miss → query_expander → retriever
     workflow.add_conditional_edges(
         "cache_checker",
         _route_after_cache,
         {
             "end": END,
-            "retriever": "retriever",
+            "query_expander": "query_expander",
         },
     )
+
+    # On cache miss: expand query then retrieve
+    workflow.add_edge("query_expander", "retriever")
 
     # Retrieval → reranking → confidence
     workflow.add_edge("retriever", "reranker_agent")
@@ -224,7 +235,7 @@ async def run_research_pipeline(question: str) -> dict:
             "citations": cached.get("citations", []),
             "externalPapersFetched": False,
             "newPapersCount": 0,
-            "confidenceScore": final_state.get("confidence_score", 0.0),
+            "confidenceScore": cached.get("confidenceScore", 0.0),
             "cacheHit": True,
             "query_embedding": query_embedding,
         }

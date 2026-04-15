@@ -432,6 +432,8 @@ async def test_process_agent_ingests_external_papers() -> None:
 
     assert mock_ingest.call_count == 1
     assert state["chunks_stored"] is True
+    ingested_meta = mock_ingest.call_args[0][1]
+    assert ingested_meta["source"] == "local"
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +600,52 @@ async def test_supervisor_local_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_supervisor_skips_external_when_chunks_present_even_if_insufficient() -> None:
+    """Low confidence but reranked chunks exist: answer from library, MCP not called."""
+    from app.agents.supervisor import run_research_pipeline
+
+    weak = [_make_chunk("w1", distance=0.92), _make_chunk("w2", distance=0.93)]
+    mock_embedding = [0.1] * 384
+    llm_json = (
+        '{"summary":"From library despite low confidence.","agreements":[],'
+        '"contradictions":[],"researchGaps":[],"citations":[]}'
+    )
+    mock_response = _make_openai_response(llm_json)
+
+    mock_bm25 = MagicMock()
+    mock_bm25.is_ready = True
+    mock_bm25.search.return_value = []
+    mock_qp_client = _make_mock_query_processor_client(mock_embedding)
+
+    mock_analysis_client = AsyncMock()
+    mock_analysis_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    mock_mcp = AsyncMock(return_value=[])
+
+    with patch("app.agents.query_processor.AsyncOpenAI", return_value=mock_qp_client), \
+         patch("app.agents.query_expander.AsyncOpenAI", return_value=mock_qp_client), \
+         patch("app.agents.cache_checker.answer_cache.lookup", new_callable=AsyncMock, return_value=None), \
+         patch("app.agents.retriever.vector_store.query", new_callable=AsyncMock, return_value=weak), \
+         patch("app.agents.retriever.vector_store.query_by_embedding", new_callable=AsyncMock, return_value=weak), \
+         patch("app.agents.retriever.bm25_index", mock_bm25), \
+         patch(
+             "app.agents.reranker_agent.reranker.rerank",
+             return_value=[dict(c, rerank_score=-4.0) for c in weak],
+         ), \
+         patch("app.agents.external_search_agent._call_mcp_tool", mock_mcp), \
+         patch("app.agents.analysis_agent.AsyncOpenAI", return_value=mock_analysis_client), \
+         patch("app.agents.storage_agent.answer_cache.store", new_callable=AsyncMock):
+
+        result = await run_research_pipeline("niche topic low similarity")
+
+    mock_mcp.assert_not_called()
+    assert result["externalPapersFetched"] is False
+    assert result["summary"] == "From library despite low confidence."
+
+
+@pytest.mark.asyncio
 async def test_supervisor_external_path() -> None:
-    """When local results are insufficient, external search is triggered."""
+    """When the library returns no chunks, external search is triggered."""
     from app.agents.supervisor import run_research_pipeline
 
     mock_embedding = [0.1] * 384

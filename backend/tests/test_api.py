@@ -81,6 +81,9 @@ async def test_get_stats(client: AsyncClient) -> None:
     stats = body["data"]
     assert "paperCount" in stats
     assert "isConnected" in stats
+    assert "dbSizeMB" in stats
+    if stats["paperCount"] == 0:
+        assert stats["dbSizeMB"] == 0.0
 
 
 # ---------------------------------------------------------------------------

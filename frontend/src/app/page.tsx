@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Upload, Search, FileText, Clock, BarChart3, Zap, Globe } from "lucide-react";
+import { Upload, Search, FileText, Clock, Zap, Globe } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -96,7 +96,7 @@ export default function DashboardPage() {
         <Card>
           <CardContent className="p-6">
             <p className="text-3xl font-bold text-blue-600">
-              {stats?.dbSizeMB ?? 0} MB
+              {stats == null ? "—" : `${stats.dbSizeMB} MB`}
             </p>
             <p className="text-sm text-gray-500 mt-1">DB Size</p>
           </CardContent>
@@ -248,7 +248,7 @@ export default function DashboardPage() {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">
             Pipeline Statistics
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card>
               <CardContent className="p-6">
                 <p className="text-3xl font-bold text-blue-600">
@@ -262,20 +262,10 @@ export default function DashboardPage() {
             <Card>
               <CardContent className="p-6">
                 <p className="text-3xl font-bold text-blue-600">
-                  {Math.round(cacheStats.avg_confidence * 100)}%
-                </p>
-                <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
-                  <BarChart3 className="w-3 h-3" /> Avg Confidence
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-6">
-                <p className="text-3xl font-bold text-blue-600">
                   {Math.round(cacheStats.external_usage_ratio * 100)}%
                 </p>
                 <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
-                  <Globe className="w-3 h-3" /> External Usage
+                  <Globe className="w-3 h-3" /> External discovery
                 </p>
               </CardContent>
             </Card>

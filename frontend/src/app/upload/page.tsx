@@ -140,7 +140,7 @@ export default function UploadPage() {
     } else {
       toast({
         title: `${result.data?.uploaded ?? 0} paper(s) uploaded`,
-        description: "Papers have been stored in ChromaDB.",
+        description: "Papers have been stored in local database.",
       });
       getDbStats().then((r) => r.data && setDbStats(r.data));
     }
@@ -202,7 +202,7 @@ export default function UploadPage() {
       if (res.error) throw new Error(res.error);
       toast({
         title: `${res.data?.imported ?? 0} paper(s) imported`,
-        description: `${res.data?.chunks ?? 0} chunks stored in ChromaDB.`,
+        description: `${res.data?.chunks ?? 0} chunks stored in local database.`,
       });
       setSelectedIds(new Set());
       getDbStats().then((r) => r.data && setDbStats(r.data));
@@ -303,6 +303,8 @@ export default function UploadPage() {
                       {uf.status === "error" && (
                         <XCircle className="w-5 h-5 text-red-500" />
                       )}
+
+                      {uf.status !== "success" && (
                       <button
                         onClick={() => removeFile(uf.id)}
                         className="text-gray-400 hover:text-gray-600 rounded-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -311,6 +313,7 @@ export default function UploadPage() {
                       >
                         <X className="w-4 h-4" />
                       </button>
+                      )}
                     </div>
                   </div>
                   {uf.status === "uploading" && (
@@ -531,7 +534,7 @@ export default function UploadPage() {
       <Separator className="my-6" />
 
       {/* Status Bar */}
-      <div className="flex items-center gap-4 text-sm text-gray-600 mb-6">
+      {/* <div className="flex items-center gap-4 text-sm text-gray-600 mb-6">
         <span>{dbStats?.paperCount ?? "—"} papers stored</span>
         <span>&middot;</span>
         <span>{dbStats?.dbSizeMB ?? "—"} MB used</span>
@@ -555,17 +558,17 @@ export default function UploadPage() {
               : "Disconnected"}
           </span>
         </span>
-      </div>
+      </div> */}
 
       {/* Papers Table */}
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">
+      {/* <h2 className="text-lg font-semibold text-gray-900 mb-4">
         Papers in Your Library
       </h2>
       <EmptyState
         icon={<FileText className="w-16 h-16" />}
         title="No papers yet"
         description="Upload a PDF or enter a DOI above to get started."
-      />
+      /> */}
     </div>
   );
 }

@@ -16,7 +16,7 @@ const variantLabels: Record<BadgeVariant, string> = {
   pdf: "PDF",
   doi: "DOI",
   arxiv: "arXiv",
-  local: "Local",
+  local: "Library",
   external: "External",
 };
 

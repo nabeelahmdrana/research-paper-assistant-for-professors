@@ -78,16 +78,24 @@ class Reranker:
         self._load()
 
         if self._model is None:
-            # Graceful degradation: return first top_k without reranking
-            logger.warning("Reranker: model unavailable — returning top_k without reranking")
-            return [dict(c, rerank_score=0.0) for c in chunks[:top_k]]
+            # Model unavailable — mark all chunks as irrelevant (score=-10.0) so
+            # the reranker_agent's relevance filter drops them and the pipeline
+            # falls through to external search.  Never assign a neutral 0.0 here
+            # because 0.0 > _MIN_RERANK_SCORE (-3.0) and would let stale, off-topic
+            # library chunks pass through to the analysis agent.
+            logger.warning(
+                "Reranker: model unavailable — marking all chunks as irrelevant (score=-10.0)"
+            )
+            return [dict(c, rerank_score=-10.0) for c in chunks[:top_k]]
 
         pairs = [(query, c["text"]) for c in chunks]
         try:
             scores: list[float] = self._model.predict(pairs).tolist()
         except Exception as exc:
             logger.error("Reranker: prediction error — %s", exc)
-            return [dict(c, rerank_score=0.0) for c in chunks[:top_k]]
+            # Same reasoning as model-unavailable path: irrelevant score so
+            # off-topic library chunks don't silently pass the relevance filter.
+            return [dict(c, rerank_score=-10.0) for c in chunks[:top_k]]
 
         scored_chunks = sorted(
             [dict(chunk, rerank_score=score) for chunk, score in zip(chunks, scores)],

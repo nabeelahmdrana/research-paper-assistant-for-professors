@@ -114,7 +114,8 @@ async def ingest_by_doi_or_url(doi_or_url: str) -> dict:
         "title": title or doi_or_url,
         "authors": authors,
         "year": year,
-        "source": "external",
+        # Persisted in the professor's Chroma — treat as library, not live MCP.
+        "source": "local",
         "doi": doi,
         "abstract": abstract,
         "date_added": datetime.now(timezone.utc).isoformat(),
