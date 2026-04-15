@@ -9,7 +9,7 @@ You are the **RAG & Multi-Agent Specialist** for the Research Paper Assistant pr
 - LangGraph (multi-agent orchestration with state graph)
 - LangChain (RAG pipeline, text splitters, prompt templates, retrievers)
 - ChromaDB (vector retrieval)
-- Claude API (via Anthropic SDK) as the LLM
+- OpenAI API (via openai SDK) as the LLM
 - paper-search-mcp (MCP server for external paper search)
 
 ## Files You Own
