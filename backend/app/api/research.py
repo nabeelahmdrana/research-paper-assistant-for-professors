@@ -51,16 +51,42 @@ class ResearchQueryRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-memory query statistics counters
-# These are module-level and safe for single-worker asyncio FastAPI.
+# Persistent pipeline statistics — backed by a JSON file so counts survive
+# server restarts.  Same load/save pattern as _results_store below.
 # ---------------------------------------------------------------------------
 
-_stats: dict[str, float] = {
+_STATS_DEFAULTS: dict[str, float] = {
     "total_queries": 0,
     "cache_hits": 0,
     "external_queries": 0,
     "confidence_sum": 0.0,  # running total for avg calculation
 }
+
+
+def _stats_file() -> Path:
+    return Path(settings.stats_store_path)
+
+
+def _load_stats() -> dict[str, float]:
+    f = _stats_file()
+    if f.exists():
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            # Merge with defaults so new keys added in future are always present
+            return {**_STATS_DEFAULTS, **data}
+        except Exception:
+            pass
+    return dict(_STATS_DEFAULTS)
+
+
+def _save_stats(stats: dict[str, float]) -> None:
+    f = _stats_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(stats, indent=2, default=str), encoding="utf-8")
+
+
+# Load from disk at import time so counts are correct from the first request
+_stats: dict[str, float] = _load_stats()
 
 
 # ---------------------------------------------------------------------------
@@ -90,13 +116,14 @@ def _seed_exact_cache(results: dict[str, dict]) -> None:
 
 
 def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> None:
-    """Update in-memory stats after a pipeline run."""
+    """Update persistent stats after a pipeline run."""
     _stats["total_queries"] += 1
     if cache_hit:
         _stats["cache_hits"] += 1
     if external_used:
         _stats["external_queries"] += 1
     _stats["confidence_sum"] += confidence
+    _save_stats(_stats)
 
 
 def _external_discovery_used(local_sufficient: bool, external_papers: list) -> bool:

@@ -44,7 +44,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 font-bold text-blue-600 text-lg">
-          <BookOpen className="w-5 h-5" />
+          <BookOpen className="w-10 h-10" />
         </Link>
 
         {/* Desktop nav */}

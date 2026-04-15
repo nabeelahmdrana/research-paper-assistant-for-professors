@@ -21,7 +21,8 @@ async function apiFetch<T>(
     const body = await res.json();
     return {
       data: body.data ?? null,
-      error: body.error ?? null,
+      // FastAPI HTTPException uses "detail"; our envelope uses "error"
+      error: body.error ?? body.detail ?? null,
       status: res.status,
     };
   } catch (err) {
@@ -422,6 +423,40 @@ export async function importExternalPapers(
     };
   }
   return { data: res.data, error: null, status: res.status };
+}
+
+// ---------------------------------------------------------------------------
+// Citation ingestion helpers
+// ---------------------------------------------------------------------------
+
+export async function checkPaperExists(
+  doi?: string,
+  title?: string
+): Promise<{ exists: boolean; paper_id: string | null }> {
+  const params = new URLSearchParams();
+  if (doi) params.set("doi", doi);
+  if (title) params.set("title", title);
+  const res = await apiFetch<{ exists: boolean; paper_id: string | null }>(
+    `/api/papers/check?${params}`
+  );
+  return res.data ?? { exists: false, paper_id: null };
+}
+
+export async function ingestCitation(citation: {
+  title: string;
+  authors: string[];
+  year: number;
+  doi?: string;
+  url?: string;
+}): Promise<{ paper_id: string; chunks_stored: number }> {
+  const res = await apiFetch<{ paper_id: string; chunks_stored: number }>(
+    "/api/papers/ingest-citation",
+    { method: "POST", body: JSON.stringify(citation) }
+  );
+  if (res.error || !res.data) {
+    throw new Error(res.error ?? "Citation ingestion failed");
+  }
+  return res.data;
 }
 
 export async function checkHealth(): Promise<{

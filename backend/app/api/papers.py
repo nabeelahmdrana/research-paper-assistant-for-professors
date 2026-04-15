@@ -5,6 +5,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
@@ -392,6 +394,206 @@ async def delete_paper(paper_id: str) -> dict:
 
     return {
         "data": {"deleted": True, "paper_id": paper_id},
+        "error": None,
+        "status": 200,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/check  — does this paper already exist in the library?
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/check")
+async def check_paper_exists(
+    doi: str | None = Query(default=None),
+    title: str | None = Query(default=None),
+) -> dict:
+    """Return whether a paper is already stored in ChromaDB.
+
+    Matches by DOI first (exact), then by normalised title.  At least one of
+    ``doi`` or ``title`` must be provided.
+    """
+    if not doi and not title:
+        raise HTTPException(
+            status_code=400, detail="Provide at least one of: doi, title"
+        )
+
+    collection = vector_store.get_chunks_collection()
+
+    # 1. Try exact DOI match
+    if doi:
+        try:
+            results = collection.get(where={"doi": doi.strip()}, limit=1, include=["metadatas"])
+            if results.get("metadatas"):
+                meta = results["metadatas"][0]
+                return {
+                    "data": {"exists": True, "paper_id": meta.get("paper_id")},
+                    "error": None,
+                    "status": 200,
+                }
+        except Exception:
+            pass
+
+    # 2. Fall back to normalised title match
+    if title:
+        normalised = title.strip().lower()
+        try:
+            results = collection.get(where={"title": title.strip()}, limit=1, include=["metadatas"])
+            if results.get("metadatas"):
+                meta = results["metadatas"][0]
+                return {
+                    "data": {"exists": True, "paper_id": meta.get("paper_id")},
+                    "error": None,
+                    "status": 200,
+                }
+        except Exception:
+            pass
+
+        # ChromaDB WHERE is case-sensitive; do a broader scan for a normalised match
+        try:
+            all_results = collection.get(limit=5000, include=["metadatas"])
+            for meta in (all_results.get("metadatas") or []):
+                stored_title = str(meta.get("title", "")).strip().lower()
+                if stored_title == normalised:
+                    return {
+                        "data": {"exists": True, "paper_id": meta.get("paper_id")},
+                        "error": None,
+                        "status": 200,
+                    }
+        except Exception:
+            pass
+
+    return {"data": {"exists": False, "paper_id": None}, "error": None, "status": 200}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/ingest-citation  — save a cited paper into the local library
+# ---------------------------------------------------------------------------
+
+class IngestCitationRequest(BaseModel):
+    title: str
+    authors: list[str] = []
+    year: int = 0
+    doi: str | None = None
+    url: str | None = None
+
+
+async def _fetch_abstract_from_semantic_scholar(doi: str) -> tuple[str, str, str, str, str]:
+    """Query Semantic Scholar for a paper's abstract by DOI.
+
+    Returns (paper_id, title, authors_str, year_str, abstract).
+    All strings are empty if the lookup fails.
+    """
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.get(
+                f"https://api.semanticscholar.org/graph/v1/paper/{doi}",
+                params={"fields": "paperId,title,authors,year,abstract"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                paper_id = data.get("paperId", "")
+                title = data.get("title", "")
+                authors = ", ".join(a.get("name", "") for a in data.get("authors", []))
+                year = str(data.get("year", ""))
+                abstract = data.get("abstract", "") or ""
+                return paper_id, title, authors, year, abstract
+        except Exception:
+            pass
+    return "", "", "", "", ""
+
+
+async def _fetch_arxiv_abstract(arxiv_url: str) -> str:
+    """Fetch the abstract text from an arXiv abstract page (open access)."""
+    # Convert /pdf/ links to /abs/ so we get the HTML abstract page
+    abs_url = re.sub(r"/pdf/", "/abs/", arxiv_url)
+    abs_url = re.sub(r"\.pdf$", "", abs_url)
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+        try:
+            resp = await client.get(abs_url, headers={"User-Agent": "research-assistant/1.0"})
+            resp.raise_for_status()
+            # Pull the abstract text out of the blockquote.abstract element
+            match = re.search(
+                r'<blockquote[^>]*class="[^"]*abstract[^"]*"[^>]*>(.*?)</blockquote>',
+                resp.text,
+                re.DOTALL | re.IGNORECASE,
+            )
+            if match:
+                raw = match.group(1)
+                # Strip inner tags and the "Abstract:" label
+                text = re.sub(r"<[^>]+>", " ", raw)
+                text = re.sub(r"^\s*abstract\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
+                return " ".join(text.split())
+        except Exception:
+            pass
+    return ""
+
+
+@router.post("/papers/ingest-citation")
+async def ingest_citation(body: IngestCitationRequest) -> dict:
+    """Save an external cited paper into the local ChromaDB library.
+
+    Strategy (no paywall hits):
+    1. DOI present  → query Semantic Scholar for the abstract; ingest abstract text.
+    2. arXiv URL    → fetch the open-access abstract page; ingest abstract text.
+    3. Fallback     → build a searchable stub from title + authors + year.
+
+    The function never tries to fetch a publisher DOI URL directly, which avoids
+    the 403 / paywall errors that ``ingest_by_doi_or_url`` can hit.
+    """
+    doi = (body.doi or "").strip()
+    url = (body.url or "").strip()
+
+    paper_id = ""
+    title = body.title
+    authors_str = ", ".join(body.authors)
+    year_str = str(body.year)
+    abstract = ""
+
+    # 1. Try Semantic Scholar lookup by DOI
+    if doi:
+        ss_id, ss_title, ss_authors, ss_year, ss_abstract = (
+            await _fetch_abstract_from_semantic_scholar(doi)
+        )
+        if ss_abstract:
+            paper_id = ss_id or ""
+            title = ss_title or title
+            authors_str = ss_authors or authors_str
+            year_str = ss_year or year_str
+            abstract = ss_abstract
+
+    # 2. Try arXiv open-access abstract if we still have no abstract
+    if not abstract and url and "arxiv.org" in url:
+        abstract = await _fetch_arxiv_abstract(url)
+
+    # 3. Build a searchable stub from the citation metadata as last resort
+    if not abstract:
+        abstract = f"{title}. {authors_str} ({year_str})."
+
+    # Derive a stable paper_id slug if Semantic Scholar didn't give us one
+    if not paper_id:
+        slug = re.sub(r"[^a-z0-9]+", "_", title.lower())[:40]
+        paper_id = f"cit_{slug}"
+
+    metadata: dict = {
+        "paper_id": paper_id,
+        "title": title,
+        "authors": authors_str,
+        "year": year_str,
+        "source": "local",
+        "doi": doi,
+        "url": url,
+        "abstract": abstract,
+        "date_added": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        chunks_stored = await ingest_paper(abstract, metadata)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
+
+    return {
+        "data": {"paper_id": paper_id, "chunks_stored": chunks_stored},
         "error": None,
         "status": 200,
     }

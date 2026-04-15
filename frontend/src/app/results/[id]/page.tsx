@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   Copy,
-  FileText,
   Download,
   ExternalLink,
 } from "lucide-react";
@@ -17,7 +16,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { toast } from "@/components/ui/use-toast";
 import type { QueryResult } from "@/lib/types";
-import { getQueryResult } from "@/lib/api";
+import { getQueryResult, checkPaperExists, ingestCitation } from "@/lib/api";
 
 function formatDate(isoDate: string): string {
   return new Date(isoDate).toLocaleDateString("en-US", {
@@ -34,14 +33,56 @@ export default function ResultDetailPage() {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // citation index → true means already in ChromaDB (hide download button)
+  const [savedCitations, setSavedCitations] = useState<Set<number>>(new Set());
+  // citation index → true means currently downloading
+  const [downloadingCitations, setDownloadingCitations] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    getQueryResult(id).then((r) => {
-      if (r.data) setResult(r.data);
-      else setNotFound(true);
+    getQueryResult(id).then(async (r) => {
+      if (r.data) {
+        setResult(r.data);
+        // Check which external citations are already in the library
+        const external = r.data.citations.filter((c) => c.source === "external");
+        if (external.length > 0) {
+          const checks = await Promise.all(
+            external.map((c) => checkPaperExists(c.doi, c.title))
+          );
+          const alreadySaved = new Set<number>();
+          external.forEach((c, i) => {
+            if (checks[i].exists) alreadySaved.add(c.index);
+          });
+          setSavedCitations(alreadySaved);
+        }
+      } else {
+        setNotFound(true);
+      }
       setIsLoading(false);
     });
   }, [id]);
+
+  const handleDownloadCitation = async (citation: QueryResult["citations"][number]) => {
+    setDownloadingCitations((prev) => new Set(prev).add(citation.index));
+    try {
+      await ingestCitation({
+        title: citation.title,
+        authors: citation.authors,
+        year: citation.year,
+        doi: citation.doi,
+        url: citation.url,
+      });
+      setSavedCitations((prev) => new Set(prev).add(citation.index));
+      toast({ title: "Paper saved to library!" });
+    } catch {
+      toast({ title: "Download failed", description: "Could not ingest the paper.", variant: "destructive" });
+    } finally {
+      setDownloadingCitations((prev) => {
+        const next = new Set(prev);
+        next.delete(citation.index);
+        return next;
+      });
+    }
+  };
 
   const buildFullText = (r: QueryResult): string => {
     return [
@@ -212,37 +253,62 @@ export default function ResultDetailPage() {
                 className="space-y-3 overflow-y-auto"
                 style={{ maxHeight: "calc(100vh - 200px)" }}
               >
-                {result.citations.map((citation) => (
-                  <div key={citation.index} className="flex items-start gap-2">
-                    <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0">
-                      {citation.index}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-800 leading-tight">
-                        {citation.title}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {citation.authors[0]} &middot; {citation.year}
-                      </p>
-                      <div className="flex items-center gap-1 mt-1">
-                        <StatusBadge variant={citation.source} />
-                        {(citation.doi ?? citation.url) && (
-                          <a
-                            href={
-                              citation.url ?? `https://doi.org/${citation.doi}`
-                            }
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-500 hover:text-blue-700"
-                            aria-label="Open paper link"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
+                {result.citations.map((citation) => {
+                  const isExternal = citation.source === "external";
+                  const isSaved = savedCitations.has(citation.index);
+                  const isDownloading = downloadingCitations.has(citation.index);
+                  return (
+                    <div key={citation.index} className="flex items-start gap-2">
+                      <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                        {citation.index}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-gray-800 leading-tight">
+                          {citation.title}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {citation.authors[0]} &middot; {citation.year}
+                        </p>
+                        <div className="flex items-center gap-1 mt-1 flex-wrap">
+                          <StatusBadge variant={citation.source} />
+                          {(citation.doi ?? citation.url) && (
+                            <a
+                              href={citation.url ?? `https://doi.org/${citation.doi}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-500 hover:text-blue-700"
+                              aria-label="Open paper link"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {isExternal && !isSaved && (
+                            <button
+                              onClick={() => handleDownloadCitation(citation)}
+                              disabled={isDownloading}
+                              className="flex items-center gap-0.5 text-xs text-emerald-600 hover:text-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                              aria-label="Save to library"
+                              title="Download & save to library"
+                            >
+                              {isDownloading ? (
+                                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                                </svg>
+                              ) : (
+                                <Download className="w-3 h-3" />
+                              )}
+                              <span>{isDownloading ? "Saving…" : "Save"}</span>
+                            </button>
+                          )}
+                          {isExternal && isSaved && (
+                            <span className="text-xs text-emerald-600 font-medium">Saved</span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

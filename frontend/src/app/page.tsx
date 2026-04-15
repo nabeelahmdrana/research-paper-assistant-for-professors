@@ -255,7 +255,7 @@ export default function DashboardPage() {
                   {Math.round(cacheStats.cache_hit_rate * 100)}%
                 </p>
                 <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
-                  <Zap className="w-3 h-3" /> Cache Hit Rate
+                  <Zap className="w-3 h-3" /> Internal search
                 </p>
               </CardContent>
             </Card>

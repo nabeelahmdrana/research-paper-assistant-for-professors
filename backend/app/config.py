@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Results persistence (flat JSON — kept for backward compat)
     results_store_path: str = "./research_results.json"
 
+    # Pipeline statistics persistence (flat JSON — survives server restarts)
+    stats_store_path: str = "./pipeline_stats.json"
+
     # Answer cache
     answer_cache_similarity_threshold: float = 0.90
 
