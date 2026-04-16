@@ -8,14 +8,14 @@ confidence → optional MCP discovery when the library has no chunks → analysi
 POST /api/research/confirm completes the two-step flow when a pending result_id
 exists: ingests selected external papers, then runs analysis + storage.
 
-Results are persisted to a JSON file so they survive server restarts.
+Results are persisted exclusively to SQLite (recent_queries table) so they
+survive server restarts.  The legacy JSONL / JSON file paths have been removed.
 """
 
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import AsyncGenerator, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -33,7 +33,6 @@ from app.agents.reranker_agent import reranker_agent
 from app.agents.retriever import retriever
 from app.agents.storage_agent import storage_agent
 from app.agents.supervisor import ResearchState, run_research_pipeline
-from app.config import settings
 from app.models.schemas import ConfirmSelectionRequest
 from app.tools import sqlite_store
 
@@ -52,56 +51,52 @@ class ResearchQueryRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Persistent pipeline statistics — backed by a JSON file so counts survive
-# server restarts.  Same load/save pattern as _results_store below.
+# Persistent pipeline statistics — backed by SQLite pipeline_stats table so
+# counts survive server restarts.  Loaded into _stats at startup via
+# init_research_from_sqlite() called from main.py lifespan.
 # ---------------------------------------------------------------------------
 
 _STATS_DEFAULTS: dict[str, float] = {
     "total_queries": 0,
     "cache_hits": 0,
     "external_queries": 0,
-    "confidence_sum": 0.0,  # running total for avg calculation
+    "confidence_sum": 0.0,
 }
 
-
-def _stats_file() -> Path:
-    return Path(settings.stats_store_path)
-
-
-def _load_stats() -> dict[str, float]:
-    f = _stats_file()
-    if f.exists():
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            # Merge with defaults so new keys added in future are always present
-            return {**_STATS_DEFAULTS, **data}
-        except Exception:
-            pass
-    return dict(_STATS_DEFAULTS)
+# Seed from SQLite synchronously at import time (before async event loop).
+# Falls back to defaults if the DB does not yet exist.
+_stats: dict[str, float] = sqlite_store.load_stats_sync()
 
 
-def _save_stats(stats: dict[str, float]) -> None:
-    f = _stats_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(stats, indent=2, default=str), encoding="utf-8")
-
-
-# Load from disk at import time so counts are correct from the first request
-_stats: dict[str, float] = _load_stats()
+async def _save_stats_to_sqlite() -> None:
+    """Persist current in-memory _stats to the SQLite pipeline_stats row."""
+    total = int(_stats["total_queries"])
+    avg_confidence = (_stats["confidence_sum"] / total) if total > 0 else 0.0
+    try:
+        await sqlite_store.upsert_pipeline_stats(
+            total_papers=0,  # papers.py owns this column; pass 0 to skip overwrite
+            total_queries=total,
+            avg_processing_time=round(avg_confidence, 4),
+            cache_hits=int(_stats["cache_hits"]),
+            external_queries=int(_stats["external_queries"]),
+            confidence_sum=_stats["confidence_sum"],
+        )
+    except Exception as exc:
+        logger.warning("_save_stats_to_sqlite failed (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
 # In-memory exact-match query cache (normalized question → last result)
 # Bypasses ALL pipeline stages including OpenAI API calls for identical queries.
-# Seeded from _results_store at startup so cache survives server restarts.
+# Seeded from SQLite at startup via init_research_from_sqlite().
 # ---------------------------------------------------------------------------
 
 _exact_query_cache: dict[str, dict] = {}
 
 
-def _seed_exact_cache(results: dict[str, dict]) -> None:
-    """Populate _exact_query_cache from persisted results at startup."""
-    for result in results.values():
+def _seed_exact_cache(results: list[dict]) -> None:
+    """Populate _exact_query_cache from a list of persisted results at startup."""
+    for result in results:
         question = result.get("question", "")
         if not question:
             continue
@@ -116,23 +111,55 @@ def _seed_exact_cache(results: dict[str, dict]) -> None:
             _exact_query_cache[key] = result
 
 
-def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> None:
-    """Update persistent stats after a pipeline run."""
+async def init_research_from_sqlite() -> None:
+    """Load stats and seed exact-match cache from SQLite.
+
+    Called once during FastAPI lifespan startup after SQLite tables are
+    initialised.  Replaces the old JSON / JSONL file seeding.
+    """
+    # Reload stats from SQLite (in case the DB was updated since import time)
+    try:
+        stats_row = await sqlite_store.fetch_pipeline_stats()
+        _stats["total_queries"] = float(stats_row.get("total_queries", 0))
+        _stats["cache_hits"] = float(stats_row.get("cache_hits", 0))
+        _stats["external_queries"] = float(stats_row.get("external_queries", 0))
+        _stats["confidence_sum"] = float(stats_row.get("confidence_sum", 0.0))
+        logger.info(
+            "Research stats loaded from SQLite: total_queries=%d cache_hits=%d",
+            int(_stats["total_queries"]),
+            int(_stats["cache_hits"]),
+        )
+    except Exception as exc:
+        logger.warning("init_research_from_sqlite: stats load failed (non-fatal): %s", exc)
+
+    # Seed exact-match cache from recent_queries table
+    try:
+        all_results = await sqlite_store.fetch_all_queries()
+        _seed_exact_cache(all_results)
+        logger.info(
+            "Exact-match cache seeded from SQLite: %d entries", len(_exact_query_cache)
+        )
+    except Exception as exc:
+        logger.warning(
+            "init_research_from_sqlite: cache seeding failed (non-fatal): %s", exc
+        )
+
+
+async def _record_query(cache_hit: bool, external_used: bool, confidence: float) -> None:
+    """Update in-memory stats and persist to SQLite after a pipeline run."""
     _stats["total_queries"] += 1
     if cache_hit:
         _stats["cache_hits"] += 1
     if external_used:
         _stats["external_queries"] += 1
     _stats["confidence_sum"] += confidence
-    _save_stats(_stats)
+    await _save_stats_to_sqlite()
 
 
 async def _persist_result_to_sqlite(result: dict) -> None:
     """Save a completed research result to the SQLite recent_queries table.
 
-    Also refreshes the pipeline_stats row so the dashboard always shows
-    up-to-date totals.  Errors are swallowed so a SQLite failure never
-    breaks the API response.
+    Errors are swallowed so a SQLite failure never breaks the API response.
     """
     try:
         await sqlite_store.save_query(
@@ -144,23 +171,13 @@ async def _persist_result_to_sqlite(result: dict) -> None:
             gaps=result.get("researchGaps", []),
             citations=result.get("citations", []),
             created_at=result.get("createdAt", ""),
+            confidence_score=result.get("confidenceScore", 0.0),
+            cache_hit=result.get("cacheHit", False),
+            external_papers_fetched=result.get("externalPapersFetched", False),
+            new_papers_count=result.get("newPapersCount", 0),
         )
     except Exception as exc:
         logger.warning("_persist_result_to_sqlite: save_query failed (non-fatal): %s", exc)
-
-    # Keep pipeline_stats in sync
-    try:
-        total = int(_stats["total_queries"])
-        avg_confidence = (
-            _stats["confidence_sum"] / total if total > 0 else 0.0
-        )
-        await sqlite_store.upsert_pipeline_stats(
-            total_papers=0,   # updated by papers.py; use 0 here to avoid overwriting
-            total_queries=total,
-            avg_processing_time=round(avg_confidence, 4),
-        )
-    except Exception as exc:
-        logger.warning("_persist_result_to_sqlite: upsert_pipeline_stats failed (non-fatal): %s", exc)
 
 
 def _external_discovery_used(local_sufficient: bool, external_papers: list) -> bool:
@@ -192,104 +209,6 @@ def _is_no_result_response(result: dict) -> bool:
 # In-memory map: result_id → pipeline final_state dict
 # Only populated when local_sufficient=False and external papers are available.
 _pending_states: dict[str, dict] = {}
-
-
-# ---------------------------------------------------------------------------
-# Persistent result store — JSONL append-only format (O(1) write per result)
-#
-# Each line is a JSON object: {"id": "...", ...full result...}
-# _load_results() reads all lines and builds an id→result dict.
-# _save_results(result) appends a single JSON line (not the full dict).
-# On startup, a compaction step rewrites the file with the deduped contents
-# so deleted / updated entries don't accumulate forever.
-# ---------------------------------------------------------------------------
-
-def _results_file() -> Path:
-    return Path(settings.results_store_path)
-
-
-def _load_results() -> dict[str, dict]:
-    """Read all JSONL lines and return an id→result dict.
-
-    Also handles the legacy flat-JSON format (migration path): if the file
-    starts with '{', it is parsed as a JSON object and rewritten as JSONL.
-    """
-    f = _results_file()
-    if not f.exists():
-        # Also check legacy .json path during migration
-        legacy = f.with_suffix(".json")
-        if legacy.exists():
-            try:
-                data: dict[str, dict] = json.loads(legacy.read_text(encoding="utf-8"))
-                # Migrate to JSONL in-place
-                _compact_results(data, f)
-                logger.info("Migrated results from %s to %s", legacy, f)
-                return data
-            except Exception:
-                pass
-        return {}
-
-    try:
-        raw = f.read_text(encoding="utf-8").strip()
-        if not raw:
-            return {}
-        # Legacy flat-JSON format detection
-        if raw.startswith("{"):
-            data = json.loads(raw)
-            _compact_results(data, f)
-            return data
-        # Normal JSONL — last entry wins for duplicate ids
-        results: dict[str, dict] = {}
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                rid = obj.get("id")
-                if rid:
-                    results[rid] = obj
-            except Exception:
-                pass
-        return results
-    except Exception:
-        return {}
-
-
-def _compact_results(results: dict[str, dict], path: Path) -> None:
-    """Rewrite the JSONL file with the current deduplicated results dict."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [json.dumps(v, default=str) for v in results.values()]
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-
-def _save_results(results: dict[str, dict]) -> None:
-    """Append the most-recently-added result as a single JSONL line.
-
-    ``results`` is always ``_results_store``; we take the last-inserted entry
-    by iterating to the end.  This is O(1) I/O regardless of library size.
-    """
-    if not results:
-        return
-    # The caller always adds the new entry to _results_store before calling us,
-    # so the last value in insertion order is the one to append.
-    last_result = next(reversed(results.values()))
-    f = _results_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    with f.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(last_result, default=str) + "\n")
-
-
-# Load existing results at module import so GET endpoints work immediately
-_results_store: dict[str, dict] = _load_results()
-# Compact on startup to remove any duplicate lines from previous runs
-if _results_store:
-    try:
-        _compact_results(_results_store, _results_file())
-    except Exception:
-        pass
-# Seed exact-match cache from persisted results
-_seed_exact_cache(_results_store)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +319,7 @@ async def run_research(body: ResearchQueryRequest) -> dict:
             body.question[:60],
         )
         instant_result = {**exact_hit, "id": str(uuid.uuid4()), "cacheHit": True}
-        _record_query(
+        await _record_query(
             cache_hit=True,
             external_used=False,
             confidence=instant_result.get("confidenceScore", 0.0),
@@ -430,18 +349,16 @@ async def run_research(body: ResearchQueryRequest) -> dict:
             confidence, local_sufficient, len(external_papers),
         )
 
-    _record_query(
+    await _record_query(
         cache_hit=cache_hit,
         external_used=_external_discovery_used(local_sufficient, external_papers),
         confidence=confidence,
     )
 
-    # Persist result; only update exact-match cache for meaningful answers
-    _results_store[result["id"]] = result
-    _save_results(_results_store)
+    # Persist result to SQLite; update exact-match cache for meaningful answers
+    await _persist_result_to_sqlite(result)
     if not _is_no_result_response(result):
         _exact_query_cache[normalized_question] = result
-    await _persist_result_to_sqlite(result)
 
     return {"data": result, "error": None, "status": 200}
 
@@ -502,9 +419,7 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
             "id": str(uuid.uuid4()),
             "cacheHit": True,
         }
-        _results_store[result["id"]] = result
-        _save_results(_results_store)
-        _record_query(cache_hit=True, external_used=False, confidence=result.get("confidenceScore", 0.0))
+        await _record_query(cache_hit=True, external_used=False, confidence=result.get("confidenceScore", 0.0))
         yield _sse_event({"stage": "checking_cache"})
         yield _sse_event({"stage": "complete", "data": result})
         return
@@ -536,9 +451,7 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
                 "cacheHit": True,
                 "query_embedding": state.get("query_embedding", []),
             }
-            _results_store[result["id"]] = result
-            _save_results(_results_store)
-            _record_query(cache_hit=True, external_used=False, confidence=result["confidenceScore"])
+            await _record_query(cache_hit=True, external_used=False, confidence=result["confidenceScore"])
             yield _sse_event({"stage": "complete", "data": result})
             return
 
@@ -600,11 +513,9 @@ async def _stream_research_pipeline(question: str) -> AsyncGenerator[str, None]:
         "local_sufficient": state.get("local_sufficient", True),
     }
 
-    _results_store[result["id"]] = result
-    _save_results(_results_store)
     if not _is_no_result_response(result):
         _exact_query_cache[question.strip().lower()] = result
-    _record_query(
+    await _record_query(
         cache_hit=False,
         external_used=_external_discovery_used(
             state.get("local_sufficient", True),
@@ -745,9 +656,7 @@ async def confirm_research(body: ConfirmSelectionRequest) -> dict:
     result["externalPapersFetched"] = bool(selected)
     result["newPapersCount"] = len(selected)
 
-    # Persist
-    _results_store[result_id] = result
-    _save_results(_results_store)
+    # Persist to SQLite
     await _persist_result_to_sqlite(result)
 
     return {"data": result, "error": None, "status": 200}
@@ -760,7 +669,7 @@ async def confirm_research(body: ConfirmSelectionRequest) -> dict:
 @router.get("/research/{result_id}")
 async def get_research_result(result_id: str) -> dict:
     """Retrieve a previously computed research result by ID."""
-    result = _results_store.get(result_id)
+    result = await sqlite_store.fetch_query_by_id(result_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Result '{result_id}' not found")
 
@@ -778,14 +687,13 @@ async def list_research_results(limit: int | None = None) -> dict:
     Args:
         limit: Optional maximum number of results to return.  Omit for all.
     """
-    results = list(_results_store.values())
-    results.sort(key=lambda r: r.get("createdAt", ""), reverse=True)
-    total = len(results)
     if limit is not None and limit > 0:
-        results = results[:limit]
+        results = await sqlite_store.fetch_recent_queries(limit=limit)
+    else:
+        results = await sqlite_store.fetch_all_queries()
 
     return {
-        "data": {"results": results, "total": total},
+        "data": {"results": results, "total": len(results)},
         "error": None,
         "status": 200,
     }

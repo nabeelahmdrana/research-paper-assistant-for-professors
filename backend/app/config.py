@@ -28,12 +28,6 @@ class Settings(BaseSettings):
     # CORS
     frontend_url: str = "http://localhost:3000"
 
-    # Results persistence — JSONL append-only file (O(1) write per result)
-    results_store_path: str = "./research_results.jsonl"
-
-    # Pipeline statistics persistence (flat JSON — survives server restarts)
-    stats_store_path: str = "./pipeline_stats.json"
-
     # Answer cache
     answer_cache_similarity_threshold: float = 0.90
 

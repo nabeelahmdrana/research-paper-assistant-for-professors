@@ -30,6 +30,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("SQLite store init failed (non-fatal): %s", exc)
 
+    # Seed in-memory stats and exact-match cache from SQLite
+    try:
+        from app.api.research import init_research_from_sqlite  # noqa: PLC0415
+        await init_research_from_sqlite()
+    except Exception as exc:
+        logger.warning("Research SQLite seeding failed (non-fatal): %s", exc)
+
     try:
         logger.info("Pre-loading embedding model and ChromaDB collection...")
         vector_store.get_collection()
